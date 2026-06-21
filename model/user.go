@@ -91,6 +91,19 @@ func (s *UserStore) Create(req CreateUserReq) (*User, error) {
 	return s.Get(int(id))
 }
 
+func (s *UserStore) CreateWithPassword(username, passwordHash string) (*User, error) {
+	uid := uuid.NewString()
+	subToken := generateToken()
+	now := time.Now().UTC().Format(time.DateTime)
+	res, err := s.DB.Exec(`INSERT INTO users (name, uuid, sub_token, password, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)`,
+		username, uid, subToken, passwordHash, now, now)
+	if err != nil {
+		return nil, err
+	}
+	id, _ := res.LastInsertId()
+	return s.Get(int(id))
+}
+
 type UpdateUserReq struct {
 	Name              *string `json:"name"`
 	Enabled           *bool   `json:"enabled"`
