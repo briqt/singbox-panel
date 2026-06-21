@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/briqt/singbox-panel/model"
 	"github.com/briqt/singbox-panel/singbox"
@@ -145,7 +146,7 @@ func (h *ConfigHandler) putRawConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	mvCmd := fmt.Sprintf("cp %s %s && rm %s", tmpPath, node.ConfigPath, tmpPath)
+	mvCmd := fmt.Sprintf("mkdir -p $(dirname %s) && cp %s %s && rm %s", node.ConfigPath, tmpPath, node.ConfigPath, tmpPath)
 	if out, err := sshRun(client, mvCmd); err != nil {
 		writeError(w, http.StatusInternalServerError, "move config: "+out)
 		return
@@ -302,20 +303,39 @@ func (h *ConfigHandler) HandleNodeStats(w http.ResponseWriter, r *http.Request) 
 // SSH helpers
 
 func (h *ConfigHandler) sshConnect(node *model.Node) (*ssh.Client, error) {
+	var authMethods []ssh.AuthMethod
+
+	// Try key auth first
 	keyBytes, err := os.ReadFile(h.SSHKeyPath)
-	if err != nil {
-		return nil, fmt.Errorf("read ssh key: %w", err)
+	if err == nil {
+		signer, err := ssh.ParsePrivateKey(keyBytes)
+		if err == nil {
+			authMethods = append(authMethods, ssh.PublicKeys(signer))
+		}
 	}
-	signer, err := ssh.ParsePrivateKey(keyBytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse ssh key: %w", err)
+
+	// Fallback to password if available
+	if node.SSHPassword != "" {
+		authMethods = append(authMethods, ssh.Password(node.SSHPassword))
 	}
+
+	if len(authMethods) == 0 {
+		return nil, fmt.Errorf("no auth method available (no key and no password)")
+	}
+
 	config := &ssh.ClientConfig{
 		User:            node.SSHUser,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		Auth:            authMethods,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         10 * time.Second,
 	}
-	addr := fmt.Sprintf("%s:%d", node.Host, node.Port)
+
+	// Handle IPv6 addresses properly
+	host := node.Host
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]"
+	}
+	addr := fmt.Sprintf("%s:%d", host, node.Port)
 	return ssh.Dial("tcp", addr, config)
 }
 
@@ -336,7 +356,7 @@ func (h *ConfigHandler) pushViaSSH(node *model.Node, configBytes []byte) error {
 		return fmt.Errorf("config check failed: %s: %w", out, err)
 	}
 
-	mvCmd := fmt.Sprintf("cp %s %s && rm %s", tmpPath, node.ConfigPath, tmpPath)
+	mvCmd := fmt.Sprintf("mkdir -p $(dirname %s) && cp %s %s && rm %s", node.ConfigPath, tmpPath, node.ConfigPath, tmpPath)
 	if out, err := sshRun(client, mvCmd); err != nil {
 		return fmt.Errorf("move config: %s: %w", out, err)
 	}
