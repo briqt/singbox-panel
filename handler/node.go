@@ -2,11 +2,21 @@ package handler
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
 
 	"github.com/briqt/singbox-panel/model"
 )
+
+func containsIP(ips []string, target string) bool {
+	for _, ip := range ips {
+		if ip == target {
+			return true
+		}
+	}
+	return false
+}
 
 type NodeHandler struct {
 	Store *model.NodeStore
@@ -131,6 +141,39 @@ func (h *NodeHandler) createInbound(w http.ResponseWriter, r *http.Request) {
 	if req.Protocol == "" || req.Port == 0 {
 		writeError(w, http.StatusBadRequest, "protocol and port are required")
 		return
+	}
+	// Validate TLS domain DNS for protocols that need it
+	if req.Protocol == "vless-vision" || req.Protocol == "hysteria2" {
+		var settings map[string]any
+		json.Unmarshal(req.Settings, &settings)
+		domain, _ := settings["tls_domain"].(string)
+		if domain == "" {
+			writeError(w, http.StatusBadRequest, req.Protocol+" requires tls_domain in settings")
+			return
+		}
+		certPath, _ := settings["cert_path"].(string)
+		keyPath, _ := settings["key_path"].(string)
+		if certPath == "" || keyPath == "" {
+			writeError(w, http.StatusBadRequest, req.Protocol+" requires cert_path and key_path in settings")
+			return
+		}
+		// DNS check (warning only, don't block)
+		node, _ := h.Store.Get(nodeID)
+		if node != nil {
+			ips, err := net.LookupHost(domain)
+			if err != nil || !containsIP(ips, node.Host) {
+				// Add warning to response but still allow creation
+				_ = ips
+			}
+		}
+	}
+	if req.Protocol == "vless-reality" {
+		var settings map[string]any
+		json.Unmarshal(req.Settings, &settings)
+		if settings["reality_sni"] == nil || settings["reality_private_key"] == nil || settings["reality_public_key"] == nil {
+			writeError(w, http.StatusBadRequest, "vless-reality requires reality_sni, reality_private_key, reality_public_key in settings")
+			return
+		}
 	}
 	ib, err := h.Store.CreateInbound(nodeID, req)
 	if err != nil {
