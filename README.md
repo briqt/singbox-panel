@@ -109,6 +109,16 @@ All admin endpoints require `Authorization: Bearer <ADMIN_TOKEN>`.
 go build -trimpath -ldflags="-s -w" -o singbox-panel .
 ```
 
+## Agent Skill
+
+This project includes an Agent skill for AI-assisted management. Install globally:
+
+```bash
+npx skills add briqt/singbox-panel -g -y
+```
+
+Once installed, any compatible Agent (Claude Code, Codex, Goose, etc.) can manage the panel through natural language — create users, grant access, push configs, check stats.
+
 ## License
 
 MIT
