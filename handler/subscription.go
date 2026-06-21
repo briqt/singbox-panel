@@ -49,10 +49,7 @@ func (h *SubscriptionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 
-	content := singbox.GenerateSubscription(*user, nodesWithInbounds)
-	encoded := base64.StdEncoding.EncodeToString([]byte(content))
-
-	// Subscription-Userinfo header (used by Clash, Shadowrocket, etc.)
+	// Subscription-Userinfo header
 	upload := user.TrafficUsedBytes / 2
 	download := user.TrafficUsedBytes / 2
 	total := user.TrafficLimitBytes
@@ -60,10 +57,39 @@ func (h *SubscriptionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	if user.ExpireAt != "" {
 		userinfo += fmt.Sprintf("; expire=%s", user.ExpireAt)
 	}
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Subscription-Userinfo", userinfo)
 	w.Header().Set("Profile-Update-Interval", "6")
-	w.Header().Set("Content-Disposition", "attachment; filename=nodes")
-	w.Write([]byte(encoded))
+
+	format := detectFormat(r)
+	switch format {
+	case "clash":
+		content := singbox.GenerateClashConfig(*user, nodesWithInbounds)
+		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+		w.Header().Set("Content-Disposition", "attachment; filename=config.yaml")
+		w.Write([]byte(content))
+	default:
+		content := singbox.GenerateSubscription(*user, nodesWithInbounds)
+		encoded := base64.StdEncoding.EncodeToString([]byte(content))
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Disposition", "attachment; filename=nodes")
+		w.Write([]byte(encoded))
+	}
+}
+
+func detectFormat(r *http.Request) string {
+	if f := r.URL.Query().Get("format"); f != "" {
+		return f
+	}
+	ua := strings.ToLower(r.Header.Get("User-Agent"))
+	switch {
+	case strings.Contains(ua, "clash"):
+		return "clash"
+	case strings.Contains(ua, "mihomo"):
+		return "clash"
+	case strings.Contains(ua, "stash"):
+		return "clash"
+	case strings.Contains(ua, "verge"):
+		return "clash"
+	}
+	return "base64"
 }
