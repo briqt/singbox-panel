@@ -14,9 +14,12 @@ type User struct {
 	Name              string `json:"name"`
 	UUID              string `json:"uuid"`
 	SubToken          string `json:"sub_token"`
+	Password          string `json:"-"`
 	Enabled           bool   `json:"enabled"`
 	TrafficLimitBytes int64  `json:"traffic_limit_bytes"`
 	TrafficUsedBytes  int64  `json:"traffic_used_bytes"`
+	TrafficResetDay   int    `json:"traffic_reset_day"`
+	TrafficLastReset  string `json:"traffic_last_reset,omitempty"`
 	ExpireAt          string `json:"expire_at"`
 	CreatedAt         string `json:"created_at"`
 	UpdatedAt         string `json:"updated_at"`
@@ -27,7 +30,7 @@ type UserStore struct {
 }
 
 func (s *UserStore) List() ([]User, error) {
-	rows, err := s.DB.Query(`SELECT id, name, uuid, sub_token, enabled, traffic_limit_bytes, traffic_used_bytes, expire_at, created_at, updated_at FROM users ORDER BY id`)
+	rows, err := s.DB.Query(`SELECT id, name, uuid, sub_token, enabled, traffic_limit_bytes, traffic_used_bytes, COALESCE(traffic_reset_day,0), COALESCE(traffic_last_reset,''), expire_at, created_at, updated_at FROM users ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +39,7 @@ func (s *UserStore) List() ([]User, error) {
 	for rows.Next() {
 		var u User
 		var enabled int
-		if err := rows.Scan(&u.ID, &u.Name, &u.UUID, &u.SubToken, &enabled, &u.TrafficLimitBytes, &u.TrafficUsedBytes, &u.ExpireAt, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Name, &u.UUID, &u.SubToken, &enabled, &u.TrafficLimitBytes, &u.TrafficUsedBytes, &u.TrafficResetDay, &u.TrafficLastReset, &u.ExpireAt, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, err
 		}
 		u.Enabled = enabled == 1
@@ -48,8 +51,8 @@ func (s *UserStore) List() ([]User, error) {
 func (s *UserStore) Get(id int) (*User, error) {
 	var u User
 	var enabled int
-	err := s.DB.QueryRow(`SELECT id, name, uuid, sub_token, enabled, traffic_limit_bytes, traffic_used_bytes, expire_at, created_at, updated_at FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Name, &u.UUID, &u.SubToken, &enabled, &u.TrafficLimitBytes, &u.TrafficUsedBytes, &u.ExpireAt, &u.CreatedAt, &u.UpdatedAt)
+	err := s.DB.QueryRow(`SELECT id, name, uuid, sub_token, enabled, traffic_limit_bytes, traffic_used_bytes, COALESCE(traffic_reset_day,0), COALESCE(traffic_last_reset,''), expire_at, created_at, updated_at FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Name, &u.UUID, &u.SubToken, &enabled, &u.TrafficLimitBytes, &u.TrafficUsedBytes, &u.TrafficResetDay, &u.TrafficLastReset, &u.ExpireAt, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -60,8 +63,20 @@ func (s *UserStore) Get(id int) (*User, error) {
 func (s *UserStore) GetBySubToken(token string) (*User, error) {
 	var u User
 	var enabled int
-	err := s.DB.QueryRow(`SELECT id, name, uuid, sub_token, enabled, traffic_limit_bytes, traffic_used_bytes, expire_at, created_at, updated_at FROM users WHERE sub_token = ?`, token).
-		Scan(&u.ID, &u.Name, &u.UUID, &u.SubToken, &enabled, &u.TrafficLimitBytes, &u.TrafficUsedBytes, &u.ExpireAt, &u.CreatedAt, &u.UpdatedAt)
+	err := s.DB.QueryRow(`SELECT id, name, uuid, sub_token, enabled, traffic_limit_bytes, traffic_used_bytes, COALESCE(traffic_reset_day,0), COALESCE(traffic_last_reset,''), expire_at, created_at, updated_at FROM users WHERE sub_token = ?`, token).
+		Scan(&u.ID, &u.Name, &u.UUID, &u.SubToken, &enabled, &u.TrafficLimitBytes, &u.TrafficUsedBytes, &u.TrafficResetDay, &u.TrafficLastReset, &u.ExpireAt, &u.CreatedAt, &u.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	u.Enabled = enabled == 1
+	return &u, nil
+}
+
+func (s *UserStore) GetByUsername(username string) (*User, error) {
+	var u User
+	var enabled int
+	err := s.DB.QueryRow(`SELECT id, name, uuid, sub_token, COALESCE(password,''), enabled, traffic_limit_bytes, traffic_used_bytes, COALESCE(traffic_reset_day,0), COALESCE(traffic_last_reset,''), expire_at, created_at, updated_at FROM users WHERE name = ?`, username).
+		Scan(&u.ID, &u.Name, &u.UUID, &u.SubToken, &u.Password, &enabled, &u.TrafficLimitBytes, &u.TrafficUsedBytes, &u.TrafficResetDay, &u.TrafficLastReset, &u.ExpireAt, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +123,7 @@ type UpdateUserReq struct {
 	Name              *string `json:"name"`
 	Enabled           *bool   `json:"enabled"`
 	TrafficLimitBytes *int64  `json:"traffic_limit_bytes"`
+	TrafficResetDay   *int    `json:"traffic_reset_day"`
 	ExpireAt          *string `json:"expire_at"`
 }
 
@@ -126,6 +142,9 @@ func (s *UserStore) Update(id int, req UpdateUserReq) (*User, error) {
 	if req.TrafficLimitBytes != nil {
 		s.DB.Exec(`UPDATE users SET traffic_limit_bytes = ?, updated_at = ? WHERE id = ?`, *req.TrafficLimitBytes, now, id)
 	}
+	if req.TrafficResetDay != nil {
+		s.DB.Exec(`UPDATE users SET traffic_reset_day = ?, updated_at = ? WHERE id = ?`, *req.TrafficResetDay, now, id)
+	}
 	if req.ExpireAt != nil {
 		s.DB.Exec(`UPDATE users SET expire_at = ?, updated_at = ? WHERE id = ?`, *req.ExpireAt, now, id)
 	}
@@ -138,7 +157,7 @@ func (s *UserStore) Delete(id int) error {
 }
 
 func (s *UserStore) ListEnabled() ([]User, error) {
-	rows, err := s.DB.Query(`SELECT id, name, uuid, sub_token, enabled, traffic_limit_bytes, traffic_used_bytes, expire_at, created_at, updated_at FROM users WHERE enabled = 1 AND (expire_at = '' OR expire_at > datetime('now')) ORDER BY id`)
+	rows, err := s.DB.Query(`SELECT id, name, uuid, sub_token, enabled, traffic_limit_bytes, traffic_used_bytes, COALESCE(traffic_reset_day,0), COALESCE(traffic_last_reset,''), expire_at, created_at, updated_at FROM users WHERE enabled = 1 AND (expire_at = '' OR expire_at > datetime('now')) ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +166,7 @@ func (s *UserStore) ListEnabled() ([]User, error) {
 	for rows.Next() {
 		var u User
 		var enabled int
-		if err := rows.Scan(&u.ID, &u.Name, &u.UUID, &u.SubToken, &enabled, &u.TrafficLimitBytes, &u.TrafficUsedBytes, &u.ExpireAt, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Name, &u.UUID, &u.SubToken, &enabled, &u.TrafficLimitBytes, &u.TrafficUsedBytes, &u.TrafficResetDay, &u.TrafficLastReset, &u.ExpireAt, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, err
 		}
 		u.Enabled = enabled == 1
@@ -168,6 +187,28 @@ func (s *UserStore) ResetSubToken(userID int) (string, error) {
 	token := generateToken()
 	_, err := s.DB.Exec(`UPDATE users SET sub_token = ?, updated_at = datetime('now') WHERE id = ?`, token, userID)
 	return token, err
+}
+
+// CheckTrafficReset performs lazy reset: if user has a reset_day configured
+// and the current month's reset date has passed without a reset, clear traffic.
+func (s *UserStore) CheckTrafficReset(u *User) {
+	if u.TrafficResetDay <= 0 || u.TrafficResetDay > 28 {
+		return
+	}
+	now := time.Now().UTC()
+	resetDate := time.Date(now.Year(), now.Month(), u.TrafficResetDay, 0, 0, 0, 0, time.UTC)
+	if now.Before(resetDate) {
+		// Haven't reached reset day this month yet — check previous month
+		resetDate = resetDate.AddDate(0, -1, 0)
+	}
+	expected := resetDate.Format("2006-01-02")
+	if u.TrafficLastReset >= expected {
+		return
+	}
+	// Reset needed
+	s.DB.Exec(`UPDATE users SET traffic_used_bytes = 0, traffic_last_reset = ?, updated_at = datetime('now') WHERE id = ?`, expected, u.ID)
+	u.TrafficUsedBytes = 0
+	u.TrafficLastReset = expected
 }
 
 func (s *UserStore) IsActive(u *User) bool {

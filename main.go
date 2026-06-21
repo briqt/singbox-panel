@@ -28,15 +28,23 @@ func main() {
 	nodeStore := &model.NodeStore{DB: database}
 	accessStore := &model.AccessStore{DB: database}
 
+	authHandler := &handler.AuthHandler{
+		Users: userStore, AdminUser: cfg.AdminUser,
+		AdminPass: cfg.AdminPass, JWTSecret: cfg.JWTSecret,
+	}
+	meHandler := &handler.MeHandler{Users: userStore, Nodes: nodeStore, Access: accessStore}
 	userHandler := &handler.UserHandler{Store: userStore}
 	nodeHandler := &handler.NodeHandler{Store: nodeStore}
 	subHandler := &handler.SubscriptionHandler{Users: userStore, Nodes: nodeStore, Access: accessStore}
 	configHandler := &handler.ConfigHandler{Users: userStore, Nodes: nodeStore, Access: accessStore, SSHKeyPath: cfg.SSHKeyPath}
 	batchHandler := &handler.BatchHandler{Nodes: nodeStore, Config: configHandler}
-	authHandler := &handler.AuthHandler{Users: userStore, AdminToken: cfg.AdminToken}
 	accessHandler := &handler.AccessHandler{Access: accessStore, Nodes: nodeStore}
 	nodeOpsHandler := &handler.NodeOpsHandler{Nodes: nodeStore, Config: configHandler}
 	setupHandler := &handler.SetupHandler{Nodes: nodeStore, Config: configHandler, Ops: nodeOpsHandler}
+	validateHandler := &handler.ValidateHandler{Config: configHandler}
+
+	admin := authHandler.AdminOnly
+	auth := authHandler.JWTAuth
 
 	mux := http.NewServeMux()
 
@@ -50,12 +58,17 @@ func main() {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	// Public: registration
+	// Public
+	mux.HandleFunc("/api/login", authHandler.HandleLogin)
 	mux.HandleFunc("/api/register", authHandler.HandleRegister)
 
-	// User CRUD + batch ops (admin)
-	mux.HandleFunc("/api/users", adminAuth(cfg.AdminToken, userHandler.ServeHTTP))
-	mux.HandleFunc("/api/users/", adminAuth(cfg.AdminToken, func(w http.ResponseWriter, r *http.Request) {
+	// User self-service (any authenticated user)
+	mux.HandleFunc("/api/me", auth(meHandler.HandleMe))
+	mux.HandleFunc("/api/me/nodes", auth(meHandler.HandleMyNodes))
+
+	// Admin: User CRUD
+	mux.HandleFunc("/api/users", admin(userHandler.ServeHTTP))
+	mux.HandleFunc("/api/users/", admin(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/access") {
 			accessHandler.ServeHTTP(w, r)
 		} else {
@@ -63,10 +76,9 @@ func main() {
 		}
 	}))
 
-	// Node CRUD + config ops (admin)
-	validateHandler := &handler.ValidateHandler{Config: configHandler}
-	mux.HandleFunc("/api/nodes", adminAuth(cfg.AdminToken, nodeHandler.ServeHTTP))
-	mux.HandleFunc("/api/nodes/", adminAuth(cfg.AdminToken, func(w http.ResponseWriter, r *http.Request) {
+	// Admin: Node CRUD + ops
+	mux.HandleFunc("/api/nodes", admin(nodeHandler.ServeHTTP))
+	mux.HandleFunc("/api/nodes/", admin(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if strings.HasSuffix(path, "/generate") || strings.HasSuffix(path, "/push") ||
 			strings.HasSuffix(path, "/raw-config") {
@@ -83,18 +95,14 @@ func main() {
 			nodeHandler.ServeHTTP(w, r)
 		}
 	}))
-	mux.HandleFunc("/api/inbounds/", adminAuth(cfg.AdminToken, nodeHandler.ServeHTTP))
+	mux.HandleFunc("/api/inbounds/", admin(nodeHandler.ServeHTTP))
 
-	// DNS validation (admin)
-	mux.HandleFunc("/api/validate/dns", adminAuth(cfg.AdminToken, validateHandler.HandleDNSCheck))
-
-	// Batch operations (admin)
-	mux.HandleFunc("/api/batch/push-all", adminAuth(cfg.AdminToken, batchHandler.PushAll))
-	mux.HandleFunc("/api/batch/template", adminAuth(cfg.AdminToken, batchHandler.ApplyTemplate))
-
-	// Stats (admin)
-	mux.HandleFunc("/api/stats/users", adminAuth(cfg.AdminToken, configHandler.HandleUserStats))
-	mux.HandleFunc("/api/stats/nodes", adminAuth(cfg.AdminToken, configHandler.HandleNodeStats))
+	// Admin: validation, batch, stats
+	mux.HandleFunc("/api/validate/dns", admin(validateHandler.HandleDNSCheck))
+	mux.HandleFunc("/api/batch/push-all", admin(batchHandler.PushAll))
+	mux.HandleFunc("/api/batch/template", admin(batchHandler.ApplyTemplate))
+	mux.HandleFunc("/api/stats/users", admin(configHandler.HandleUserStats))
+	mux.HandleFunc("/api/stats/nodes", admin(configHandler.HandleNodeStats))
 
 	// Traffic report from node agents (auth via X-Node-Token)
 	mux.HandleFunc("/api/node/report", configHandler.HandleTrafficReport)
@@ -106,18 +114,5 @@ func main() {
 	log.Printf("singbox-panel listening on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("server error: %v", err)
-	}
-}
-
-func adminAuth(token string, next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") != token {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error":"unauthorized"}`))
-			return
-		}
-		next(w, r)
 	}
 }

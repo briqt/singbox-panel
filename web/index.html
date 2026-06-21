@@ -39,10 +39,25 @@
       <h1 class="text-lg font-semibold text-gray-900">SingBox Panel</h1>
       <p class="text-xs text-gray-400 mt-1" x-text="T('loginHint')"></p>
     </div>
-    <input x-model="tokenInput" type="password" :placeholder="T('token')"
-           class="w-full px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition placeholder-gray-400"
-           @keydown.enter="login()">
-    <button @click="login()" class="w-full mt-3 bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg text-sm font-medium transition" x-text="T('signIn')"></button>
+    <div class="space-y-3">
+      <input x-model="loginUser" type="text" :placeholder="T('username')" autocomplete="username"
+             class="w-full px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition placeholder-gray-400">
+      <input x-model="loginPass" type="password" :placeholder="T('password')" autocomplete="current-password"
+             class="w-full px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition placeholder-gray-400"
+             @keydown.enter="login()">
+    </div>
+    <button @click="login()" class="w-full mt-4 bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg text-sm font-medium transition" x-text="T('signIn')"></button>
+    <div class="text-center mt-3">
+      <button @click="showRegForm=!showRegForm" class="text-xs text-gray-400 hover:text-blue-600 transition" x-text="T('register')"></button>
+    </div>
+    <template x-if="showRegForm">
+      <div class="mt-4 pt-4 border-t border-gray-100 space-y-3">
+        <input x-model="regUser" type="text" :placeholder="T('username')" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400">
+        <input x-model="regPass" type="password" :placeholder="T('password')" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400"
+               @keydown.enter="doRegister()">
+        <button @click="doRegister()" class="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 rounded-lg text-sm transition" x-text="T('register')"></button>
+      </div>
+    </template>
   </div>
 </div>
 </template>
@@ -55,15 +70,24 @@
     <div class="flex items-center gap-6">
       <span class="font-semibold text-gray-900 text-sm">SingBox Panel</span>
       <nav class="flex items-center gap-1">
-        <template x-for="t in [{id:'dash',k:'overview'},{id:'users',k:'users'},{id:'nodes',k:'nodes'},{id:'stats',k:'stats'}]">
-          <button @click="tab=t.id;loadTab()" :class="tab===t.id?'bg-gray-100 text-gray-900':'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
-                  class="px-3 py-1.5 rounded-md text-sm transition" x-text="T(t.k)"></button>
+        <template x-if="role==='admin'">
+          <template x-for="t in [{id:'dash',k:'overview'},{id:'users',k:'users'},{id:'nodes',k:'nodes'},{id:'stats',k:'stats'}]">
+            <button @click="tab=t.id;loadTab()" :class="tab===t.id?'bg-gray-100 text-gray-900':'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
+                    class="px-3 py-1.5 rounded-md text-sm transition" x-text="T(t.k)"></button>
+          </template>
+        </template>
+        <template x-if="role==='user'">
+          <template x-for="t in [{id:'myinfo',k:'myInfo'}]">
+            <button @click="tab=t.id;loadTab()" :class="tab===t.id?'bg-gray-100 text-gray-900':'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
+                    class="px-3 py-1.5 rounded-md text-sm transition" x-text="T(t.k)"></button>
+          </template>
         </template>
       </nav>
     </div>
     <div class="flex items-center gap-3">
+      <span class="text-xs text-gray-400" x-text="currentUser"></span>
       <button @click="toggleLang()" class="text-xs text-gray-400 hover:text-gray-600 transition" x-text="lang==='zh'?'EN':'中文'"></button>
-      <button @click="authed=false;localStorage.removeItem('admin_token')" class="text-xs text-gray-400 hover:text-gray-600 transition" x-text="T('signOut')"></button>
+      <button @click="logout()" class="text-xs text-gray-400 hover:text-gray-600 transition" x-text="T('signOut')"></button>
     </div>
   </header>
 
@@ -193,11 +217,11 @@
                   <span class="text-[10px] text-gray-400" x-text="nodeStatuses[n.id].version||T('notInstalled')"></span>
                 </div>
               </template>
-              <span class="text-gray-300 text-xs" x-text="expandedNode===n.id?'▾':'▸'"></span>
+              <span class="text-gray-300 text-xs" x-text="expandedNodes[n.id]?'▾':'▸'"></span>
             </div>
           </div>
           <!-- Expanded Detail -->
-          <div x-show="expandedNode===n.id" class="border-t border-gray-100">
+          <div x-show="expandedNodes[n.id]" class="border-t border-gray-100">
             <!-- Action Buttons -->
             <div class="px-4 py-3 bg-gray-50/80 flex flex-wrap items-center gap-2 border-b border-gray-100">
               <button @click.stop="checkNodeStatus(n)" class="px-2.5 py-1.5 text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-md transition" x-text="T('checkStatus')"></button>
@@ -213,9 +237,9 @@
             <!-- Inbounds -->
             <div class="px-4 py-3">
               <div class="text-xs text-gray-400 mb-2 font-medium" x-text="T('inbounds')"></div>
-              <template x-if="nodeDetail&&nodeDetail.id===n.id">
+              <template x-if="nodeDetails[n.id]">
                 <div class="space-y-1">
-                  <template x-for="ib in nodeDetail.inbounds||[]" :key="ib.id">
+                  <template x-for="ib in nodeDetails[n.id].inbounds||[]" :key="ib.id">
                     <div class="flex items-center gap-3 text-xs py-1.5 px-2 rounded hover:bg-gray-50">
                       <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium"
                             :class="ib.protocol==='hysteria2'?'bg-purple-100 text-purple-700':ib.protocol==='vless-reality'?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'"
@@ -225,7 +249,7 @@
                       <button @click.stop="deleteInbound(ib)" class="ml-auto text-red-300 hover:text-red-500 transition text-[10px]">✕</button>
                     </div>
                   </template>
-                  <div x-show="!nodeDetail.inbounds||nodeDetail.inbounds.length===0" class="text-xs text-gray-400 italic py-1" x-text="T('noInbounds')"></div>
+                  <div x-show="!(nodeDetails[n.id]?.inbounds?.length)" class="text-xs text-gray-400 italic py-1" x-text="T('noInbounds')"></div>
                 </div>
               </template>
             </div>
@@ -263,6 +287,58 @@
         </tbody>
       </table>
     </div>
+  </div>
+
+  <!-- My Info (user role) -->
+  <div x-show="tab==='myinfo'">
+    <h2 class="text-lg font-semibold text-gray-900 mb-4" x-text="T('myInfo')"></h2>
+    <template x-if="meData">
+      <div class="space-y-4">
+        <div class="bg-white border border-gray-200 rounded-xl p-5">
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <div class="text-xs text-gray-400 mb-1" x-text="T('username')"></div>
+              <div class="text-sm font-medium text-gray-900" x-text="meData.name"></div>
+            </div>
+            <div>
+              <div class="text-xs text-gray-400 mb-1" x-text="T('expires')"></div>
+              <div class="text-sm text-gray-700" x-text="meData.expire_at||'∞'"></div>
+            </div>
+            <div>
+              <div class="text-xs text-gray-400 mb-1" x-text="T('traffic')"></div>
+              <div class="flex items-center gap-2">
+                <div class="w-24 h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div class="h-full rounded-full bg-blue-500" :style="'width:'+Math.min(100,meData.traffic_limit_bytes?Math.round(meData.traffic_used_bytes/meData.traffic_limit_bytes*100):0)+'%'"></div>
+                </div>
+                <span class="text-xs text-gray-500" x-text="fmtBytes(meData.traffic_used_bytes)+' / '+(meData.traffic_limit_bytes?fmtBytes(meData.traffic_limit_bytes):'∞')"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="bg-white border border-gray-200 rounded-xl p-5">
+          <div class="text-xs text-gray-400 mb-2 font-medium" x-text="T('subscription')"></div>
+          <div class="flex items-center gap-2">
+            <input type="text" readonly :value="location.origin+'/sub/'+meData.sub_token" class="flex-1 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs font-mono text-gray-600">
+            <button @click="navigator.clipboard.writeText(location.origin+'/sub/'+meData.sub_token);toast(T('copied'))" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition" x-text="T('copy')"></button>
+          </div>
+          <div class="flex items-center gap-2 mt-2">
+            <input type="text" readonly :value="location.origin+'/sub/'+meData.sub_token+'?format=clash'" class="flex-1 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs font-mono text-gray-600">
+            <button @click="navigator.clipboard.writeText(location.origin+'/sub/'+meData.sub_token+'?format=clash');toast(T('copied'))" class="px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs rounded-lg transition">Clash</button>
+          </div>
+        </div>
+        <div class="bg-white border border-gray-200 rounded-xl p-5">
+          <div class="text-xs text-gray-400 mb-3 font-medium" x-text="T('myNodes')"></div>
+          <template x-for="n in myNodes" :key="n.id">
+            <div class="flex items-center gap-3 py-2 text-sm">
+              <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+              <span class="text-gray-900" x-text="n.name"></span>
+              <span class="text-xs text-gray-400 font-mono" x-text="n.domain||''"></span>
+            </div>
+          </template>
+          <div x-show="!myNodes||myNodes.length===0" class="text-xs text-gray-400 italic" x-text="T('noNodes')"></div>
+        </div>
+      </div>
+    </template>
   </div>
 
   <!-- Create User Modal -->
@@ -406,43 +482,51 @@
 function fmtBytes(b){if(!b||b===0)return'0 B';const u=['B','KB','MB','GB','TB'];const i=Math.floor(Math.log(b)/Math.log(1024));return(b/Math.pow(1024,i)).toFixed(i>0?2:0)+' '+u[i]}
 
 const I18N={
-  en:{overview:'Overview',users:'Users',nodes:'Nodes',stats:'Stats',signOut:'Sign out',signIn:'Sign In',loginHint:'Admin access required',token:'Token',
+  en:{overview:'Overview',users:'Users',nodes:'Nodes',stats:'Stats',signOut:'Sign out',signIn:'Sign In',loginHint:'Sign in to continue',
     totalTraffic:'Total Traffic',user:'User',traffic:'Traffic',expires:'Expires',subscription:'Sub',actions:'Actions',newUser:'New User',newNode:'New Node',
     copyLink:'copy link',access:'access',reset:'reset',del:'del',push:'Push',preview:'Preview',pushAll:'Push All',inbounds:'Inbounds',
     noInbounds:'No inbounds — use Auto Setup to configure protocols',trafficStats:'Traffic Stats',used:'Used',limit:'Limit',usage:'Usage',
-    username:'Username',cancel:'Cancel',create:'Create',nodeAccess:'Node Access',grantAll:'Grant All',done:'Done',
+    username:'Username',password:'Password',cancel:'Cancel',create:'Create',nodeAccess:'Node Access',grantAll:'Grant All',done:'Done',
     nodeName:'Node name',domainOptional:'Domain (optional, for Hysteria2/HTTPUpgrade)',
     setupSSH:'Setup SSH',install:'Install',autoSetup:'Auto Setup',checkStatus:'Status',rawConfig:'Raw Config',
     rootPassword:'Root password',sshHint:'Inject panel SSH key to the node for key-based auth',confirm:'Confirm',working:'Working...',
     domain:'Domain',protocols:'Protocols',needsDomain:'needs domain',noDomain:'no domain needed',forCDN:'for CDN/blocked IP',
     autoSetupDomainHint:'Leave empty to use node domain. With domain: Hy2+Reality. Without: Reality only.',
-    startSetup:'Start Setup',saveRestart:'Save & Restart',notInstalled:'not installed'},
-  zh:{overview:'概览',users:'用户',nodes:'节点',stats:'统计',signOut:'退出',signIn:'登录',loginHint:'需要管理员令牌',token:'令牌',
+    startSetup:'Start Setup',saveRestart:'Save & Restart',notInstalled:'not installed',
+    register:'Register',myInfo:'My Info',myNodes:'My Nodes',noNodes:'No accessible nodes',copy:'Copy',copied:'Copied',
+    regSuccess:'Registered! Waiting for admin approval.',invalidCreds:'Invalid credentials',notApproved:'Account not yet approved'},
+  zh:{overview:'概览',users:'用户',nodes:'节点',stats:'统计',signOut:'退出',signIn:'登录',loginHint:'请登录以继续',
     totalTraffic:'总流量',user:'用户',traffic:'流量',expires:'到期',subscription:'订阅',actions:'操作',newUser:'新建用户',newNode:'新建节点',
     copyLink:'复制链接',access:'权限',reset:'重置',del:'删除',push:'推送',preview:'预览',pushAll:'推送全部',inbounds:'入站协议',
     noInbounds:'暂无协议 — 使用一键配置添加',trafficStats:'流量统计',used:'已用',limit:'限额',usage:'用量',
-    username:'用户名',cancel:'取消',create:'创建',nodeAccess:'节点权限',grantAll:'全部授权',done:'完成',
+    username:'用户名',password:'密码',cancel:'取消',create:'创建',nodeAccess:'节点权限',grantAll:'全部授权',done:'完成',
     nodeName:'节点名称',domainOptional:'域名（可选，Hysteria2/HTTPUpgrade需要）',
     setupSSH:'配置SSH',install:'安装',autoSetup:'一键配置',checkStatus:'检测状态',rawConfig:'原始配置',
     rootPassword:'Root密码',sshHint:'注入面板SSH公钥到节点，实现免密连接',confirm:'确认',working:'执行中...',
     domain:'域名',protocols:'协议',needsDomain:'需要域名',noDomain:'无需域名',forCDN:'CDN/被墙IP使用',
     autoSetupDomainHint:'留空使用节点域名。有域名→Hy2+Reality，无域名→仅Reality',
-    startSetup:'开始配置',saveRestart:'保存并重启',notInstalled:'未安装'}
+    startSetup:'开始配置',saveRestart:'保存并重启',notInstalled:'未安装',
+    register:'注册',myInfo:'我的信息',myNodes:'我的节点',noNodes:'暂无可用节点',copy:'复制',copied:'已复制',
+    regSuccess:'注册成功，等待管理员审核',invalidCreds:'用户名或密码错误',notApproved:'账号待审核'}
 };
 
 function app(){return{
-  authed:!!localStorage.getItem('admin_token'),
-  tokenInput:'',
+  authed:!!localStorage.getItem('panel_jwt'),
+  role:localStorage.getItem('panel_role')||'',
+  currentUser:localStorage.getItem('panel_user')||'',
+  loginUser:'',loginPass:'',
+  showRegForm:false,regUser:'',regPass:'',
   lang:localStorage.getItem('panel_lang')||(navigator.language.startsWith('zh')?'zh':'en'),
-  tab:'dash',
+  tab:'',
   users:[],nodes:[],statsUsers:[],
+  meData:null,myNodes:[],
   toasts:[],
   showCreateUser:false,
   newUser:{name:'',traffic_limit_gb:100,expire_at:''},
   showCreateNode:false,
   newNode:{name:'',host:'',domain:'',port:22,ssh_user:'root'},
   showAccess:false,accessUser:null,accessNodeIds:[],
-  expandedNode:null,nodeDetail:null,nodeStatuses:{},
+  expandedNodes:{},nodeDetails:{},nodeStatuses:{},
   showSSHSetup:false,sshNode:null,sshPassword:'',
   showAutoSetup:false,autoSetupNode:null,autoSetupDomain:'',autoSetupProtos:[],
   showRawCfg:false,rawCfgNode:null,rawCfgContent:'',
@@ -451,22 +535,51 @@ function app(){return{
   T(k){return I18N[this.lang]?.[k]||I18N.en[k]||k},
   toggleLang(){this.lang=this.lang==='zh'?'en':'zh';localStorage.setItem('panel_lang',this.lang)},
 
-  async init(){if(this.authed)this.loadTab()},
-  async login(){
-    localStorage.setItem('admin_token',this.tokenInput);
-    try{await this.api('/api/health');this.authed=true;this.loadTab()}
-    catch(e){localStorage.removeItem('admin_token');this.toast(this.lang==='zh'?'令牌无效':'Invalid token','error')}
+  async init(){
+    if(this.authed){
+      this.tab=this.role==='admin'?'dash':'myinfo';
+      this.loadTab();
+    }
   },
+  async login(){
+    try{
+      const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:this.loginUser,password:this.loginPass})});
+      const d=await r.json();
+      if(!r.ok){this.toast(d.error||this.T('invalidCreds'),'error');return}
+      localStorage.setItem('panel_jwt',d.token);
+      localStorage.setItem('panel_role',d.role);
+      localStorage.setItem('panel_user',d.username);
+      this.authed=true;this.role=d.role;this.currentUser=d.username;
+      this.tab=d.role==='admin'?'dash':'myinfo';
+      this.loadTab();
+    }catch(e){this.toast(e.message,'error')}
+  },
+  async doRegister(){
+    if(!this.regUser||!this.regPass){this.toast(this.T('username')+' & '+this.T('password')+' required','error');return}
+    try{
+      const r=await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:this.regUser,password:this.regPass})});
+      const d=await r.json();
+      if(!r.ok){this.toast(d.error,'error');return}
+      this.toast(this.T('regSuccess'));this.showRegForm=false;this.regUser='';this.regPass='';
+    }catch(e){this.toast(e.message,'error')}
+  },
+  logout(){this.authed=false;this.role='';this.currentUser='';localStorage.removeItem('panel_jwt');localStorage.removeItem('panel_role');localStorage.removeItem('panel_user')},
   async loadTab(){
     try{
-      if(this.tab==='dash'||this.tab==='users'){this.users=await this.api('/api/users')||[]}
-      if(this.tab==='dash'||this.tab==='nodes'){this.nodes=await this.api('/api/nodes')||[]}
-      if(this.tab==='stats'){this.statsUsers=await this.api('/api/stats/users')||[]}
-    }catch(e){this.toast(e.message,'error')}
+      if(this.role==='admin'){
+        if(this.tab==='dash'||this.tab==='users'){this.users=await this.api('/api/users')||[]}
+        if(this.tab==='dash'||this.tab==='nodes'){this.nodes=await this.api('/api/nodes')||[]}
+        if(this.tab==='stats'){this.statsUsers=await this.api('/api/stats/users')||[]}
+      }
+      if(this.tab==='myinfo'){
+        this.meData=await this.api('/api/me');
+        this.myNodes=await this.api('/api/me/nodes')||[];
+      }
+    }catch(e){if(e.message==='unauthorized'||e.message==='invalid token'){this.logout()}else{this.toast(e.message,'error')}}
   },
   toast(msg,type='success'){this.toasts.push({id:Date.now()+Math.random(),msg,type})},
   async api(path,opts={}){
-    const h={'Authorization':'Bearer '+localStorage.getItem('admin_token'),'Content-Type':'application/json'};
+    const h={'Authorization':'Bearer '+localStorage.getItem('panel_jwt'),'Content-Type':'application/json'};
     const r=await fetch(path,{headers:h,...opts});
     const d=await r.json().catch(()=>null);
     if(!r.ok)throw new Error(d?.error||r.statusText);
@@ -531,13 +644,13 @@ function app(){return{
     if(!confirm((this.lang==='zh'?'删除协议 ':'Delete inbound ')+ib.protocol+'?'))return;
     await this.api('/api/inbounds/'+ib.id,{method:'DELETE'});
     this.toast(this.lang==='zh'?'已删除':'Deleted');
-    if(this.nodeDetail)this.nodeDetail=await this.api('/api/nodes/'+this.nodeDetail.id);
+    const nodeId=ib.node_id;if(nodeId&&this.nodeDetails[nodeId])this.nodeDetails[nodeId]=await this.api('/api/nodes/'+nodeId);
   },
 
   async toggleNodeDetail(n){
-    if(this.expandedNode===n.id){this.expandedNode=null;return}
-    this.expandedNode=n.id;this.nodeDetail=null;
-    this.nodeDetail=await this.api('/api/nodes/'+n.id);
+    if(this.expandedNodes[n.id]){delete this.expandedNodes[n.id];return}
+    this.expandedNodes[n.id]=true;
+    this.nodeDetails[n.id]=await this.api('/api/nodes/'+n.id);
   },
   async checkNodeStatus(n){
     try{
@@ -581,7 +694,7 @@ function app(){return{
       const ok=(r.inbounds||[]).filter(x=>x.status==='ok').length;
       this.toast((this.lang==='zh'?'配置完成，':'Setup done, ')+ok+(this.lang==='zh'?' 个协议':' protocols'));
       this.showAutoSetup=false;this.loadTab();
-      if(this.expandedNode===this.autoSetupNode.id)this.nodeDetail=await this.api('/api/nodes/'+this.autoSetupNode.id);
+      if(this.expandedNodes[this.autoSetupNode.id])this.nodeDetails[this.autoSetupNode.id]=await this.api('/api/nodes/'+this.autoSetupNode.id);
     }catch(e){this.toast(e.message,'error')}
     this.opLoading=false;
   },

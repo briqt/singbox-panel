@@ -25,7 +25,12 @@ func (h *SubscriptionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 
 	user, err := h.Users.GetBySubToken(token)
-	if err != nil || !h.Users.IsActive(user) {
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	h.Users.CheckTrafficReset(user)
+	if !h.Users.IsActive(user) {
 		http.NotFound(w, r)
 		return
 	}
