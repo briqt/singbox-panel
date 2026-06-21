@@ -3,6 +3,7 @@ package singbox
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/briqt/singbox-panel/model"
 )
@@ -38,138 +39,100 @@ func buildInbounds(users []model.User, inbounds []model.NodeInbound) []map[strin
 		if settings == nil {
 			settings = map[string]any{}
 		}
-
 		switch ib.Protocol {
-		case "vless-vision":
-			result = append(result, buildVLESSVision(users, ib, settings))
 		case "hysteria2":
-			result = append(result, buildHysteria2(users, ib, settings))
+			result = append(result, buildHysteria2Inbound(users, ib, settings))
 		case "vless-reality":
-			result = append(result, buildVLESSReality(users, ib, settings))
+			result = append(result, buildRealityInbound(users, ib, settings))
+		case "vless-httpupgrade":
+			result = append(result, buildHTTPUpgradeInbound(users, ib, settings))
 		}
 	}
 	return result
 }
 
-func buildVLESSVision(users []model.User, ib model.NodeInbound, settings map[string]any) map[string]any {
-	vlessUsers := make([]map[string]any, 0, len(users))
-	for _, u := range users {
-		vlessUsers = append(vlessUsers, map[string]any{
-			"name": u.Name,
-			"uuid": u.UUID,
-			"flow": "xtls-rprx-vision",
-		})
-	}
-	inbound := map[string]any{
-		"type":        "vless",
-		"tag":         tagOrDefault(ib.Tag, "VLESSTCP"),
-		"listen":      "::",
-		"listen_port": ib.Port,
-		"users":       vlessUsers,
-	}
-	if tls := buildTLSFromSettings(settings); tls != nil {
-		inbound["tls"] = tls
-	}
-	return inbound
-}
-
-func buildHysteria2(users []model.User, ib model.NodeInbound, settings map[string]any) map[string]any {
+func buildHysteria2Inbound(users []model.User, ib model.NodeInbound, s map[string]any) map[string]any {
 	hy2Users := make([]map[string]any, 0, len(users))
 	for _, u := range users {
-		hy2Users = append(hy2Users, map[string]any{
-			"name":     u.Name,
-			"password": u.UUID,
-		})
+		hy2Users = append(hy2Users, map[string]any{"name": u.Name, "password": u.UUID})
 	}
-	inbound := map[string]any{
-		"type":        "hysteria2",
-		"tag":         tagOrDefault(ib.Tag, "hysteria2"),
-		"listen":      "::",
-		"listen_port": ib.Port,
-		"up_mbps":     1000,
-		"down_mbps":   1000,
-		"users":       hy2Users,
+	domain, _ := s["domain"].(string)
+	certPath, _ := s["cert_path"].(string)
+	keyPath, _ := s["key_path"].(string)
+	return map[string]any{
+		"type": "hysteria2", "tag": tagOrDefault(ib.Tag, "hysteria2"),
+		"listen": "::", "listen_port": ib.Port,
+		"up_mbps": 1000, "down_mbps": 1000,
+		"users": hy2Users,
+		"tls": map[string]any{
+			"enabled": true, "server_name": domain, "alpn": "h3",
+			"certificate_path": certPath, "key_path": keyPath,
+		},
 	}
-	if tls := buildTLSFromSettings(settings); tls != nil {
-		inbound["tls"] = tls
-	}
-	return inbound
 }
 
-func buildVLESSReality(users []model.User, ib model.NodeInbound, settings map[string]any) map[string]any {
+func buildRealityInbound(users []model.User, ib model.NodeInbound, s map[string]any) map[string]any {
 	vlessUsers := make([]map[string]any, 0, len(users))
 	for _, u := range users {
-		vlessUsers = append(vlessUsers, map[string]any{
-			"name": u.Name,
-			"uuid": u.UUID,
-			"flow": "xtls-rprx-vision",
-		})
+		vlessUsers = append(vlessUsers, map[string]any{"name": u.Name, "uuid": u.UUID, "flow": "xtls-rprx-vision"})
 	}
-	inbound := map[string]any{
-		"type":        "vless",
-		"tag":         tagOrDefault(ib.Tag, "VLESSReality"),
-		"listen":      "::",
-		"listen_port": ib.Port,
-		"users":       vlessUsers,
-	}
-	if reality := buildRealityFromSettings(settings); reality != nil {
-		inbound["tls"] = reality
-	}
-	return inbound
-}
-
-func buildTLSFromSettings(settings map[string]any) map[string]any {
-	domain, _ := settings["tls_domain"].(string)
-	certPath, _ := settings["cert_path"].(string)
-	keyPath, _ := settings["key_path"].(string)
-	if certPath == "" && domain == "" {
-		return nil
-	}
-	tls := map[string]any{
-		"enabled": true,
-	}
-	if domain != "" {
-		tls["server_name"] = domain
-	}
-	if certPath != "" {
-		tls["certificate_path"] = certPath
-		tls["key_path"] = keyPath
-	}
-	if alpn, ok := settings["alpn"].(string); ok && alpn != "" {
-		tls["alpn"] = alpn
-	}
-	return tls
-}
-
-func buildRealityFromSettings(settings map[string]any) map[string]any {
-	sni, _ := settings["reality_sni"].(string)
-	privateKey, _ := settings["reality_private_key"].(string)
-	shortID, _ := settings["reality_short_id"].(string)
-	if sni == "" || privateKey == "" {
-		return nil
-	}
-	handshakeDest, _ := settings["reality_handshake_dest"].(string)
+	sni, _ := s["sni"].(string)
+	privateKey, _ := s["private_key"].(string)
+	shortID, _ := s["short_id"].(string)
+	handshakeDest, _ := s["handshake_server"].(string)
 	handshakePort := 443
-	if hp, ok := settings["reality_handshake_port"].(float64); ok {
+	if hp, ok := s["handshake_port"].(float64); ok {
 		handshakePort = int(hp)
 	}
 	if handshakeDest == "" {
 		handshakeDest = sni
 	}
-	reality := map[string]any{
-		"enabled": true,
-		"reality": map[string]any{
+	return map[string]any{
+		"type": "vless", "tag": tagOrDefault(ib.Tag, "vless-reality"),
+		"listen": "::", "listen_port": ib.Port,
+		"users": vlessUsers,
+		"tls": map[string]any{
 			"enabled":     true,
-			"private_key": privateKey,
-			"short_id":    []string{shortID},
-			"handshake": map[string]any{
-				"server":      handshakeDest,
-				"server_port": handshakePort,
+			"server_name": sni,
+			"reality": map[string]any{
+				"enabled":     true,
+				"private_key": privateKey,
+				"short_id":    []string{shortID},
+				"handshake": map[string]any{
+					"server":      handshakeDest,
+					"server_port": handshakePort,
+				},
 			},
 		},
-		"server_name": sni,
 	}
-	return reality
+}
+
+func buildHTTPUpgradeInbound(users []model.User, ib model.NodeInbound, s map[string]any) map[string]any {
+	vlessUsers := make([]map[string]any, 0, len(users))
+	for _, u := range users {
+		vlessUsers = append(vlessUsers, map[string]any{"name": u.Name, "uuid": u.UUID})
+	}
+	domain, _ := s["domain"].(string)
+	certPath, _ := s["cert_path"].(string)
+	keyPath, _ := s["key_path"].(string)
+	path, _ := s["path"].(string)
+	if path == "" {
+		path = "/upgrade"
+	}
+	return map[string]any{
+		"type": "vless", "tag": tagOrDefault(ib.Tag, "vless-httpupgrade"),
+		"listen": "::", "listen_port": ib.Port,
+		"users": vlessUsers,
+		"tls": map[string]any{
+			"enabled": true, "server_name": domain,
+			"certificate_path": certPath, "key_path": keyPath,
+		},
+		"transport": map[string]any{
+			"type": "httpupgrade",
+			"host": domain,
+			"path": path,
+		},
+	}
 }
 
 func tagOrDefault(tag, def string) string {
@@ -179,8 +142,10 @@ func tagOrDefault(tag, def string) string {
 	return def
 }
 
+// Subscription URI generation
+
 func GenerateSubscription(user model.User, nodes []model.NodeWithInbounds) string {
-	var lines string
+	var lines []string
 	for _, n := range nodes {
 		if !n.Enabled {
 			continue
@@ -191,74 +156,73 @@ func GenerateSubscription(user model.User, nodes []model.NodeWithInbounds) strin
 			}
 			uri := buildURI(user, n.Node, ib)
 			if uri != "" {
-				lines += uri + "\n"
+				lines = append(lines, uri)
 			}
 		}
 	}
-	return lines
+	return strings.Join(lines, "\n") + "\n"
 }
 
 func buildURI(user model.User, node model.Node, ib model.NodeInbound) string {
-	var settings map[string]any
-	json.Unmarshal(ib.Settings, &settings)
-	if settings == nil {
-		settings = map[string]any{}
+	var s map[string]any
+	json.Unmarshal(ib.Settings, &s)
+	if s == nil {
+		s = map[string]any{}
 	}
-
 	switch ib.Protocol {
-	case "vless-vision":
-		return buildVLESSVisionURI(user, node, ib, settings)
 	case "hysteria2":
-		return buildHysteria2URI(user, node, ib, settings)
+		return buildHysteria2URI(user, node, ib, s)
 	case "vless-reality":
-		return buildVLESSRealityURI(user, node, ib, settings)
+		return buildRealityURI(user, node, ib, s)
+	case "vless-httpupgrade":
+		return buildHTTPUpgradeURI(user, node, ib, s)
 	}
 	return ""
 }
 
-func buildVLESSVisionURI(user model.User, node model.Node, ib model.NodeInbound, settings map[string]any) string {
-	domain, _ := settings["tls_domain"].(string)
+func buildHysteria2URI(user model.User, node model.Node, ib model.NodeInbound, s map[string]any) string {
+	domain, _ := s["domain"].(string)
 	if domain == "" {
 		domain = node.Domain
 	}
 	if domain == "" {
 		return ""
 	}
-	uri := fmt.Sprintf("vless://%s@%s:%d?encryption=none&security=tls&sni=%s&flow=xtls-rprx-vision&type=tcp&fp=chrome",
-		user.UUID, node.Host, ib.Port, domain)
-	if alpn, _ := settings["alpn"].(string); alpn != "" {
-		uri += "&alpn=" + alpn
-	}
-	return uri + "#" + node.Name + "-vless-vision"
+	return fmt.Sprintf("hysteria2://%s@%s:%d?sni=%s&alpn=h3#%s-Hy2",
+		user.UUID, node.Host, ib.Port, domain, node.Name)
 }
 
-func buildHysteria2URI(user model.User, node model.Node, ib model.NodeInbound, settings map[string]any) string {
-	domain, _ := settings["tls_domain"].(string)
-	if domain == "" {
-		domain = node.Domain
-	}
-	if domain == "" {
-		return ""
-	}
-	uri := fmt.Sprintf("hysteria2://%s@%s:%d?sni=%s",
-		user.UUID, node.Host, ib.Port, domain)
-	if alpn, _ := settings["alpn"].(string); alpn != "" {
-		uri += "&alpn=" + alpn
-	}
-	return uri + "#" + node.Name + "-hysteria2"
-}
-
-func buildVLESSRealityURI(user model.User, node model.Node, ib model.NodeInbound, settings map[string]any) string {
-	sni, _ := settings["reality_sni"].(string)
-	publicKey, _ := settings["reality_public_key"].(string)
-	shortID, _ := settings["reality_short_id"].(string)
-	if sni == "" || publicKey == "" {
-		return ""
-	}
-	fp, _ := settings["reality_fingerprint"].(string)
+func buildRealityURI(user model.User, node model.Node, ib model.NodeInbound, s map[string]any) string {
+	sni, _ := s["sni"].(string)
+	publicKey, _ := s["public_key"].(string)
+	shortID, _ := s["short_id"].(string)
+	fp, _ := s["fingerprint"].(string)
 	if fp == "" {
 		fp = "chrome"
 	}
-	return fmt.Sprintf("vless://%s@%s:%d?encryption=none&security=reality&sni=%s&pbk=%s&sid=%s&fp=%s&flow=xtls-rprx-vision&type=tcp#%s-reality",
+	if sni == "" || publicKey == "" {
+		return ""
+	}
+	return fmt.Sprintf("vless://%s@%s:%d?encryption=none&security=reality&sni=%s&pbk=%s&sid=%s&fp=%s&flow=xtls-rprx-vision&type=tcp#%s-Reality",
 		user.UUID, node.Host, ib.Port, sni, publicKey, shortID, fp, node.Name)
+}
+
+func buildHTTPUpgradeURI(user model.User, node model.Node, ib model.NodeInbound, s map[string]any) string {
+	domain, _ := s["domain"].(string)
+	if domain == "" {
+		domain = node.Domain
+	}
+	if domain == "" {
+		return ""
+	}
+	path, _ := s["path"].(string)
+	if path == "" {
+		path = "/upgrade"
+	}
+	host := node.Host
+	if domain != "" {
+		host = domain
+	}
+	return fmt.Sprintf("vless://%s@%s:%d?encryption=none&security=tls&sni=%s&type=httpupgrade&host=%s&path=%s&fp=chrome#%s-CDN",
+		user.UUID, host, ib.Port, domain, domain, path, node.Name)
 }
