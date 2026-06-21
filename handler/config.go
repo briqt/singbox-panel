@@ -16,6 +16,7 @@ import (
 type ConfigHandler struct {
 	Users      *model.UserStore
 	Nodes      *model.NodeStore
+	Access     *model.AccessStore
 	SSHKeyPath string
 }
 
@@ -167,9 +168,24 @@ func (h *ConfigHandler) putRawConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ConfigHandler) generateConfig(nodeID int) ([]byte, error) {
-	users, err := h.Users.ListEnabled()
+	allowedUserIDs, err := h.Access.UsersForNode(nodeID)
 	if err != nil {
 		return nil, err
+	}
+	allUsers, err := h.Users.ListEnabled()
+	if err != nil {
+		return nil, err
+	}
+	// Filter to only users with access to this node
+	allowed := make(map[int]bool, len(allowedUserIDs))
+	for _, id := range allowedUserIDs {
+		allowed[id] = true
+	}
+	var users []model.User
+	for _, u := range allUsers {
+		if allowed[u.ID] {
+			users = append(users, u)
+		}
 	}
 	inbounds, err := h.Nodes.ListInbounds(nodeID)
 	if err != nil {
