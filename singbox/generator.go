@@ -8,6 +8,13 @@ import (
 	"github.com/briqt/singbox-panel/model"
 )
 
+func hostForURI(host string) string {
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
+}
+
 func GenerateConfig(users []model.User, inbounds []model.NodeInbound) ([]byte, error) {
 	config := map[string]any{
 		"log": map[string]any{
@@ -18,14 +25,6 @@ func GenerateConfig(users []model.User, inbounds []model.NodeInbound) ([]byte, e
 		"outbounds": []map[string]any{{"type": "direct", "tag": "direct"}},
 	}
 	return json.MarshalIndent(config, "", "  ")
-}
-
-func userNames(users []model.User) []string {
-	names := make([]string, len(users))
-	for i, u := range users {
-		names[i] = u.Name
-	}
-	return names
 }
 
 func buildInbounds(users []model.User, inbounds []model.NodeInbound) []map[string]any {
@@ -65,7 +64,7 @@ func buildHysteria2Inbound(users []model.User, ib model.NodeInbound, s map[strin
 		"up_mbps": 1000, "down_mbps": 1000,
 		"users": hy2Users,
 		"tls": map[string]any{
-			"enabled": true, "server_name": domain, "alpn": "h3",
+			"enabled": true, "server_name": domain, "alpn": []string{"h3"},
 			"certificate_path": certPath, "key_path": keyPath,
 		},
 	}
@@ -119,20 +118,33 @@ func buildHTTPUpgradeInbound(users []model.User, ib model.NodeInbound, s map[str
 	if path == "" {
 		path = "/upgrade"
 	}
-	return map[string]any{
+	inbound := map[string]any{
 		"type": "vless", "tag": tagOrDefault(ib.Tag, "vless-httpupgrade"),
 		"listen": "::", "listen_port": ib.Port,
 		"users": vlessUsers,
-		"tls": map[string]any{
-			"enabled": true, "server_name": domain,
-			"certificate_path": certPath, "key_path": keyPath,
-		},
 		"transport": map[string]any{
 			"type": "httpupgrade",
 			"host": domain,
 			"path": path,
 		},
 	}
+	if certPath != "" && keyPath != "" {
+		inbound["tls"] = map[string]any{
+			"enabled": true, "server_name": domain,
+			"certificate_path": certPath, "key_path": keyPath,
+		}
+	} else {
+		// ACME auto-cert: sing-box handles certificate automatically
+		inbound["tls"] = map[string]any{
+			"enabled": true, "server_name": domain,
+			"acme": map[string]any{
+				"domain":      []string{domain},
+				"email":       "acme@" + domain,
+				"provider":    "letsencrypt",
+			},
+		}
+	}
+	return inbound
 }
 
 func tagOrDefault(tag, def string) string {
@@ -189,7 +201,7 @@ func buildHysteria2URI(user model.User, node model.Node, ib model.NodeInbound, s
 		return ""
 	}
 	return fmt.Sprintf("hysteria2://%s@%s:%d?sni=%s&alpn=h3#%s-Hy2",
-		user.UUID, node.Host, ib.Port, domain, node.Name)
+		user.UUID, hostForURI(node.Host), ib.Port, domain, node.Name)
 }
 
 func buildRealityURI(user model.User, node model.Node, ib model.NodeInbound, s map[string]any) string {
@@ -204,7 +216,7 @@ func buildRealityURI(user model.User, node model.Node, ib model.NodeInbound, s m
 		return ""
 	}
 	return fmt.Sprintf("vless://%s@%s:%d?encryption=none&security=reality&sni=%s&pbk=%s&sid=%s&fp=%s&flow=xtls-rprx-vision&type=tcp#%s-Reality",
-		user.UUID, node.Host, ib.Port, sni, publicKey, shortID, fp, node.Name)
+		user.UUID, hostForURI(node.Host), ib.Port, sni, publicKey, shortID, fp, node.Name)
 }
 
 func buildHTTPUpgradeURI(user model.User, node model.Node, ib model.NodeInbound, s map[string]any) string {
@@ -219,10 +231,6 @@ func buildHTTPUpgradeURI(user model.User, node model.Node, ib model.NodeInbound,
 	if path == "" {
 		path = "/upgrade"
 	}
-	host := node.Host
-	if domain != "" {
-		host = domain
-	}
 	return fmt.Sprintf("vless://%s@%s:%d?encryption=none&security=tls&sni=%s&type=httpupgrade&host=%s&path=%s&fp=chrome#%s-CDN",
-		user.UUID, host, ib.Port, domain, domain, path, node.Name)
+		user.UUID, domain, ib.Port, domain, domain, path, node.Name)
 }

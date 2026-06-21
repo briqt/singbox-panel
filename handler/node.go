@@ -2,21 +2,11 @@ package handler
 
 import (
 	"encoding/json"
-	"net"
 	"net/http"
 	"strings"
 
 	"github.com/briqt/singbox-panel/model"
 )
-
-func containsIP(ips []string, target string) bool {
-	for _, ip := range ips {
-		if ip == target {
-			return true
-		}
-	}
-	return false
-}
 
 type NodeHandler struct {
 	Store *model.NodeStore
@@ -143,35 +133,35 @@ func (h *NodeHandler) createInbound(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Validate TLS domain DNS for protocols that need it
-	if req.Protocol == "vless-vision" || req.Protocol == "hysteria2" {
+	if req.Protocol == "hysteria2" {
 		var settings map[string]any
 		json.Unmarshal(req.Settings, &settings)
-		domain, _ := settings["tls_domain"].(string)
+		domain, _ := settings["domain"].(string)
 		if domain == "" {
-			writeError(w, http.StatusBadRequest, req.Protocol+" requires tls_domain in settings")
+			writeError(w, http.StatusBadRequest, "hysteria2 requires domain in settings")
 			return
 		}
 		certPath, _ := settings["cert_path"].(string)
 		keyPath, _ := settings["key_path"].(string)
 		if certPath == "" || keyPath == "" {
-			writeError(w, http.StatusBadRequest, req.Protocol+" requires cert_path and key_path in settings")
+			writeError(w, http.StatusBadRequest, "hysteria2 requires cert_path and key_path in settings")
 			return
 		}
-		// DNS check (warning only, don't block)
-		node, _ := h.Store.Get(nodeID)
-		if node != nil {
-			ips, err := net.LookupHost(domain)
-			if err != nil || !containsIP(ips, node.Host) {
-				// Add warning to response but still allow creation
-				_ = ips
-			}
+	}
+	if req.Protocol == "vless-httpupgrade" {
+		var settings map[string]any
+		json.Unmarshal(req.Settings, &settings)
+		domain, _ := settings["domain"].(string)
+		if domain == "" {
+			writeError(w, http.StatusBadRequest, "vless-httpupgrade requires domain in settings")
+			return
 		}
 	}
 	if req.Protocol == "vless-reality" {
 		var settings map[string]any
 		json.Unmarshal(req.Settings, &settings)
-		if settings["reality_sni"] == nil || settings["reality_private_key"] == nil || settings["reality_public_key"] == nil {
-			writeError(w, http.StatusBadRequest, "vless-reality requires reality_sni, reality_private_key, reality_public_key in settings")
+		if settings["sni"] == nil || settings["private_key"] == nil || settings["public_key"] == nil {
+			writeError(w, http.StatusBadRequest, "vless-reality requires sni, private_key, public_key in settings")
 			return
 		}
 	}

@@ -1,23 +1,29 @@
 # singbox-panel
 
-Personal sing-box proxy node management panel.
+Personal sing-box proxy node management panel. Full lifecycle: create node → SSH setup → install sing-box → auto-configure protocols → push config → manage users → subscriptions.
+
+## Supported Protocols
+
+| Protocol | Use Case | Requires Domain | Notes |
+|----------|----------|----------------|-------|
+| Hysteria2 | High speed | Yes | UDP/QUIC, fastest |
+| VLESS Reality | Anti-censorship | No | TCP, disguises as mainstream sites |
+| VLESS HTTPUpgrade | CDN relay | Yes | For blocked IPs / IPv6-only nodes |
 
 ## Features
 
-- User management with UUID-based proxy authentication
-- Multi-node management (sing-box nodes via SSH)
-- sing-box config generation with multi-user support
-- Per-user subscription URLs (base64 encoded, compatible with v2rayN/sing-box/Clash Meta)
-- SSH-based config push with validation (`sing-box check`)
-- Raw config viewing and editing via SSH
-- Traffic statistics per user per node
-- Protocol support: VLESS Vision, Hysteria2, VLESS Reality
+- **One-click node setup** — auto-selects protocols, generates keys, issues certs, pushes config
+- **User management** — UUID-based auth, traffic limits, expiry, per-node access control
+- **Multi-format subscriptions** — base64 (v2rayN/Shadowrocket), Clash Meta YAML (auto-detect via User-Agent)
+- **Certificate management** — ACME via acme.sh with auto-renewal cron
+- **Admin Web UI** — i18n (zh/en), light theme, full node lifecycle controls
+- **SSH-based operations** — key injection, sing-box install/upgrade, config push with validation
+- **Traffic enforcement** — over-limit users excluded from sing-box config (connection refused)
 
 ## Deployment
 
-The panel serves **HTTP only** on a configurable port. For production use, place it behind a reverse proxy (Caddy, nginx) for TLS termination, or access directly via IP:port.
+The panel serves **HTTP only** on a configurable port. Place behind a reverse proxy for TLS.
 
-Example with Caddy:
 ```
 panel.example.com {
     reverse_proxy http://127.0.0.1:2082
@@ -52,7 +58,7 @@ Copy `deploy/singbox-panel.service` to `/etc/systemd/system/` and adjust paths.
 
 ## Configuration
 
-Environment variables (or `.env` file):
+Environment variables (or `.env` file in working directory):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -61,47 +67,67 @@ Environment variables (or `.env` file):
 | `DATA_DIR` | `/opt/singbox-panel/data` | SQLite database directory |
 | `SSH_KEY_PATH` | `/root/.ssh/id_ed25519` | SSH private key for node management |
 
+## Node Lifecycle
+
+```
+1. Create node          POST /api/nodes
+2. Setup SSH            POST /api/nodes/{id}/setup-ssh
+3. Install sing-box     POST /api/nodes/{id}/install
+4. Auto-setup protocols POST /api/nodes/{id}/auto-setup
+5. Done — node is live, users can connect via subscription
+```
+
+Auto-setup logic:
+- Has domain → Hysteria2 + VLESS Reality (default)
+- No domain → VLESS Reality only
+- Manual override via `protocols` field
+
 ## API
 
 All admin endpoints require `Authorization: Bearer <ADMIN_TOKEN>`.
 
 ### Users
-- `GET /api/users` — list users
-- `POST /api/users` — create user (admin, enabled by default)
-- `POST /api/register` — public registration (disabled by default, no node access)
-- `GET /api/users/{id}` — get user
-- `PUT /api/users/{id}` — update user (enable/disable, set limits)
-- `DELETE /api/users/{id}` — delete user
-- `POST /api/users/{id}/reset-traffic` — reset used traffic to 0
+- `GET/POST /api/users` — list / create
+- `PUT/DELETE /api/users/{id}` — update / delete
+- `POST /api/users/{id}/reset-traffic` — reset traffic counter
 - `POST /api/users/{id}/reset-sub-token` — regenerate subscription token
+- `POST /api/register` — public registration (disabled by default)
 
 ### Access Control
 - `GET /api/users/{id}/access` — list accessible nodes
-- `POST /api/users/{id}/access` — grant node access (`{"node_id":1}` or `{"all":true}`)
-- `DELETE /api/users/{id}/access` — revoke node access
+- `POST /api/users/{id}/access` — grant (`{node_id}` or `{all:true}`)
+- `DELETE /api/users/{id}/access` — revoke
 
 ### Nodes
-- `GET /api/nodes` — list nodes
-- `POST /api/nodes` — create node
-- `GET /api/nodes/{id}` — get node with inbounds
-- `PUT /api/nodes/{id}` — update node
-- `DELETE /api/nodes/{id}` — delete node
-- `POST /api/nodes/{id}/inbounds` — add inbound
+- `GET/POST /api/nodes` — list / create
+- `GET/PUT/DELETE /api/nodes/{id}` — get (with inbounds) / update / delete
+- `POST /api/nodes/{id}/inbounds` — add inbound manually
 - `DELETE /api/inbounds/{id}` — remove inbound
 
-### Config Operations
-- `POST /api/nodes/{id}/generate` — preview generated config (dry-run)
-- `POST /api/nodes/{id}/push` — generate + push + restart
-- `GET /api/nodes/{id}/raw-config` — read current config from node via SSH
-- `PUT /api/nodes/{id}/raw-config` — write raw config to node via SSH
+### Node Operations
+- `GET /api/nodes/{id}/status` — SSH reachability + sing-box status
+- `GET /api/nodes/{id}/version` — sing-box version
+- `POST /api/nodes/{id}/setup-ssh` — inject panel SSH key via password
+- `POST /api/nodes/{id}/install` — install/upgrade sing-box
+- `POST /api/nodes/{id}/auto-setup` — one-click protocol configuration
+- `POST /api/nodes/{id}/cert` — issue TLS certificate
+
+### Config
+- `POST /api/nodes/{id}/generate` — preview config (dry-run)
+- `POST /api/nodes/{id}/push` — push + restart
+- `POST /api/batch/push-all` — push all enabled nodes
+- `GET/PUT /api/nodes/{id}/raw-config` — read/write raw config
+
+### Validation
+- `GET /api/validate/dns?domain=X&ip=Y` — DNS resolution check
 
 ### Subscription (no auth)
-- `GET /sub/{token}` — user subscription URL
+- `GET /sub/{token}` — auto-detect format by User-Agent
+- `GET /sub/{token}?format=clash` — force Clash Meta YAML
 
-### Traffic
-- `POST /api/node/report` — node agent traffic report endpoint
-- `GET /api/stats/users` — per-user traffic summary
-- `GET /api/stats/nodes` — per-node traffic summary
+### Stats
+- `GET /api/stats/users` — per-user traffic
+- `GET /api/stats/nodes` — per-node traffic
 
 ## Building
 
@@ -109,15 +135,17 @@ All admin endpoints require `Authorization: Bearer <ADMIN_TOKEN>`.
 go build -trimpath -ldflags="-s -w" -o singbox-panel .
 ```
 
+Cross-compile: `GOOS=linux GOARCH=amd64` or `GOARCH=arm64`.
+
 ## Agent Skill
 
-This project includes an Agent skill for AI-assisted management. Install globally:
+Install the AI management skill globally:
 
 ```bash
 npx skills add briqt/singbox-panel -g -y
 ```
 
-Once installed, any compatible Agent (Claude Code, Codex, Goose, etc.) can manage the panel through natural language — create users, grant access, push configs, check stats.
+Compatible agents (Claude Code, etc.) can then manage the panel through natural language.
 
 ## License
 

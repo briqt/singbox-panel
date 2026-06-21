@@ -58,18 +58,24 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 	var req AutoSetupReq
 	json.NewDecoder(r.Body).Decode(&req)
 
-	// Default protocols based on conditions
-	if len(req.Protocols) == 0 {
-		if req.Domain != "" || node.Domain != "" {
-			req.Protocols = []string{"hysteria2", "vless-reality"}
-		} else {
-			req.Protocols = []string{"vless-reality"}
-		}
-	}
-
 	domain := req.Domain
 	if domain == "" {
 		domain = node.Domain
+	}
+
+	// Default protocols based on domain + DNS conditions
+	if len(req.Protocols) == 0 {
+		if domain != "" {
+			// Check if domain resolves to node's real IP (DNS-only) or CF proxy
+			if isDNSDirect(domain, node.Host) {
+				req.Protocols = []string{"hysteria2", "vless-reality"}
+			} else {
+				// CF proxied or DNS mismatch → use HTTPUpgrade (CDN) + Reality (IP direct)
+				req.Protocols = []string{"vless-httpupgrade", "vless-reality"}
+			}
+		} else {
+			req.Protocols = []string{"vless-reality"}
+		}
 	}
 
 	// Update node domain if provided
@@ -175,10 +181,9 @@ test -f %s && test -f %s && echo "CERT_OK"
 				port = 443
 			}
 			path := "/" + randomHex(8)
-			certPath := fmt.Sprintf("/etc/sing-box/tls/%s.crt", domain)
-			keyPath := fmt.Sprintf("/etc/sing-box/tls/%s.key", domain)
-			settings := mustMarshal(map[string]any{"domain": domain, "cert_path": certPath, "key_path": keyPath, "path": path})
-			h.Nodes.CreateInbound(node.ID, model.CreateInboundReq{Tag: "vless-httpupgrade", Protocol: "vless-httpupgrade", Port: port, Settings: settings})
+			// No cert_path → generator uses sing-box ACME auto-cert
+			settings := map[string]any{"domain": domain, "path": path}
+			h.Nodes.CreateInbound(node.ID, model.CreateInboundReq{Tag: "vless-httpupgrade", Protocol: "vless-httpupgrade", Port: port, Settings: mustMarshal(settings)})
 			results = append(results, inboundResult{Protocol: proto, Port: port, Status: "ok", Details: map[string]string{"path": path}})
 		}
 	}
@@ -221,14 +226,6 @@ func parseKeypair(output string) (privateKey, publicKey string) {
 }
 
 func splitLines(s string) []string {
-	var lines []string
-	for _, l := range [2]string{"\n", "\r\n"} {
-		_ = l
-	}
-	return append(lines, split(s)...)
-}
-
-func split(s string) []string {
 	var result []string
 	for _, line := range strings.Split(s, "\n") {
 		result = append(result, strings.TrimSpace(line))
@@ -247,4 +244,17 @@ func contains(s, sub string) bool {
 func mustMarshal(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b
+}
+
+func isDNSDirect(domain, nodeHost string) bool {
+	ips, err := net.LookupHost(domain)
+	if err != nil {
+		return false
+	}
+	for _, ip := range ips {
+		if ip == nodeHost {
+			return true
+		}
+	}
+	return false
 }
