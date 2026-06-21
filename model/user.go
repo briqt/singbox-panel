@@ -125,7 +125,7 @@ func (s *UserStore) Delete(id int) error {
 }
 
 func (s *UserStore) ListEnabled() ([]User, error) {
-	rows, err := s.DB.Query(`SELECT id, name, uuid, sub_token, enabled, traffic_limit_bytes, traffic_used_bytes, expire_at, created_at, updated_at FROM users WHERE enabled = 1 ORDER BY id`)
+	rows, err := s.DB.Query(`SELECT id, name, uuid, sub_token, enabled, traffic_limit_bytes, traffic_used_bytes, expire_at, created_at, updated_at FROM users WHERE enabled = 1 AND (expire_at = '' OR expire_at > datetime('now')) ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -141,6 +141,36 @@ func (s *UserStore) ListEnabled() ([]User, error) {
 		users = append(users, u)
 	}
 	return users, nil
+}
+
+func (s *UserStore) AddTraffic(userID int, bytes int64) {
+	s.DB.Exec(`UPDATE users SET traffic_used_bytes = traffic_used_bytes + ?, updated_at = datetime('now') WHERE id = ?`, bytes, userID)
+}
+
+func (s *UserStore) ResetTraffic(userID int) {
+	s.DB.Exec(`UPDATE users SET traffic_used_bytes = 0, updated_at = datetime('now') WHERE id = ?`, userID)
+}
+
+func (s *UserStore) ResetSubToken(userID int) (string, error) {
+	token := generateToken()
+	_, err := s.DB.Exec(`UPDATE users SET sub_token = ?, updated_at = datetime('now') WHERE id = ?`, token, userID)
+	return token, err
+}
+
+func (s *UserStore) IsActive(u *User) bool {
+	if !u.Enabled {
+		return false
+	}
+	if u.ExpireAt != "" {
+		now := time.Now().UTC().Format(time.DateTime)
+		if u.ExpireAt < now {
+			return false
+		}
+	}
+	if u.TrafficLimitBytes > 0 && u.TrafficUsedBytes >= u.TrafficLimitBytes {
+		return false
+	}
+	return true
 }
 
 func generateToken() string {

@@ -27,6 +27,7 @@ func main() {
 	nodeHandler := &handler.NodeHandler{Store: nodeStore}
 	subHandler := &handler.SubscriptionHandler{Users: userStore, Nodes: nodeStore}
 	configHandler := &handler.ConfigHandler{Users: userStore, Nodes: nodeStore, SSHKeyPath: cfg.SSHKeyPath}
+	batchHandler := &handler.BatchHandler{Users: userStore, Nodes: nodeStore, Config: configHandler}
 
 	mux := http.NewServeMux()
 
@@ -35,25 +36,35 @@ func main() {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	// User CRUD + batch ops
 	mux.HandleFunc("/api/users", adminAuth(cfg.AdminToken, userHandler.ServeHTTP))
 	mux.HandleFunc("/api/users/", adminAuth(cfg.AdminToken, userHandler.ServeHTTP))
 
+	// Node CRUD + config ops
 	mux.HandleFunc("/api/nodes", adminAuth(cfg.AdminToken, nodeHandler.ServeHTTP))
 	mux.HandleFunc("/api/nodes/", adminAuth(cfg.AdminToken, func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-		if strings.HasSuffix(path, "/generate") || strings.HasSuffix(path, "/push") {
+		if strings.HasSuffix(path, "/generate") || strings.HasSuffix(path, "/push") ||
+			strings.HasSuffix(path, "/raw-config") {
 			configHandler.ServeHTTP(w, r)
 		} else {
 			nodeHandler.ServeHTTP(w, r)
 		}
 	}))
-
 	mux.HandleFunc("/api/inbounds/", adminAuth(cfg.AdminToken, nodeHandler.ServeHTTP))
 
-	mux.HandleFunc("/api/node/report", func(w http.ResponseWriter, r *http.Request) {
-		configHandler.HandleTrafficReport(w, r)
-	})
+	// Batch operations
+	mux.HandleFunc("/api/batch/push-all", adminAuth(cfg.AdminToken, batchHandler.PushAll))
+	mux.HandleFunc("/api/batch/template", adminAuth(cfg.AdminToken, batchHandler.ApplyTemplate))
 
+	// Stats
+	mux.HandleFunc("/api/stats/users", adminAuth(cfg.AdminToken, configHandler.HandleUserStats))
+	mux.HandleFunc("/api/stats/nodes", adminAuth(cfg.AdminToken, configHandler.HandleNodeStats))
+
+	// Traffic report from node agents (auth via X-Node-Token)
+	mux.HandleFunc("/api/node/report", configHandler.HandleTrafficReport)
+
+	// Subscription (public, token in URL)
 	mux.HandleFunc("/sub/", subHandler.ServeHTTP)
 
 	addr := "127.0.0.1:" + cfg.Port

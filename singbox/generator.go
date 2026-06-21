@@ -229,19 +229,33 @@ func buildURI(user model.User, node model.Node, ib model.NodeInbound) string {
 func buildVLESSVisionURI(user model.User, node model.Node, ib model.NodeInbound, settings map[string]any) string {
 	domain, _ := settings["tls_domain"].(string)
 	if domain == "" {
-		domain = node.Host
+		domain = node.Domain
 	}
-	return fmt.Sprintf("vless://%s@%s:%d?encryption=none&security=tls&sni=%s&flow=xtls-rprx-vision&type=tcp#%s-vless-vision",
-		user.UUID, node.Host, ib.Port, domain, node.Name)
+	if domain == "" {
+		return ""
+	}
+	uri := fmt.Sprintf("vless://%s@%s:%d?encryption=none&security=tls&sni=%s&flow=xtls-rprx-vision&type=tcp&fp=chrome",
+		user.UUID, node.Host, ib.Port, domain)
+	if alpn, _ := settings["alpn"].(string); alpn != "" {
+		uri += "&alpn=" + alpn
+	}
+	return uri + "#" + node.Name + "-vless-vision"
 }
 
 func buildHysteria2URI(user model.User, node model.Node, ib model.NodeInbound, settings map[string]any) string {
 	domain, _ := settings["tls_domain"].(string)
 	if domain == "" {
-		domain = node.Host
+		domain = node.Domain
 	}
-	return fmt.Sprintf("hysteria2://%s@%s:%d?sni=%s#%s-hysteria2",
-		user.UUID, node.Host, ib.Port, domain, node.Name)
+	if domain == "" {
+		return ""
+	}
+	uri := fmt.Sprintf("hysteria2://%s@%s:%d?sni=%s",
+		user.UUID, node.Host, ib.Port, domain)
+	if alpn, _ := settings["alpn"].(string); alpn != "" {
+		uri += "&alpn=" + alpn
+	}
+	return uri + "#" + node.Name + "-hysteria2"
 }
 
 func buildVLESSRealityURI(user model.User, node model.Node, ib model.NodeInbound, settings map[string]any) string {
@@ -251,6 +265,10 @@ func buildVLESSRealityURI(user model.User, node model.Node, ib model.NodeInbound
 	if sni == "" || publicKey == "" {
 		return ""
 	}
-	return fmt.Sprintf("vless://%s@%s:%d?encryption=none&security=reality&sni=%s&pbk=%s&sid=%s&flow=xtls-rprx-vision&type=tcp#%s-reality",
-		user.UUID, node.Host, ib.Port, sni, publicKey, shortID, node.Name)
+	fp, _ := settings["reality_fingerprint"].(string)
+	if fp == "" {
+		fp = "chrome"
+	}
+	return fmt.Sprintf("vless://%s@%s:%d?encryption=none&security=reality&sni=%s&pbk=%s&sid=%s&fp=%s&flow=xtls-rprx-vision&type=tcp#%s-reality",
+		user.UUID, node.Host, ib.Port, sni, publicKey, shortID, fp, node.Name)
 }

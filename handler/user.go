@@ -19,12 +19,16 @@ func (h *UserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.list(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/users":
 		h.create(w, r)
-	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/users/"):
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/users/") && !strings.Contains(r.URL.Path, "/reset"):
 		h.get(w, r)
-	case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/users/"):
+	case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/users/") && !strings.Contains(r.URL.Path, "/reset"):
 		h.update(w, r)
 	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/users/"):
 		h.delete(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/reset-traffic"):
+		h.resetTraffic(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/reset-sub-token"):
+		h.resetSubToken(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -101,6 +105,31 @@ func (h *UserHandler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (h *UserHandler) resetTraffic(w http.ResponseWriter, r *http.Request) {
+	id := parseID(r.URL.Path, "/api/users/")
+	if id == 0 {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	h.Store.ResetTraffic(id)
+	user, _ := h.Store.Get(id)
+	writeJSON(w, http.StatusOK, user)
+}
+
+func (h *UserHandler) resetSubToken(w http.ResponseWriter, r *http.Request) {
+	id := parseID(r.URL.Path, "/api/users/")
+	if id == 0 {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	token, err := h.Store.ResetSubToken(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"sub_token": token})
 }
 
 func parseID(path, prefix string) int {
