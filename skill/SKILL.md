@@ -1,6 +1,6 @@
 ---
 name: singbox-panel
-description: 管理 singbox-panel 代理面板——用户管理（创建/启用/禁用/配额/权限）、节点管理（CRUD/配置推送/原始编辑）、订阅链接、流量统计。当用户提到代理面板、proxy panel、节点管理、用户流量、订阅链接、singbox-panel、panel.briqt.dev 时使用。也适用于：查看谁在用代理、给某人开通/关闭权限、推送配置到节点、查看流量统计。
+description: 管理 singbox-panel 代理面板——用户管理（创建/启用/禁用/配额/权限）、节点管理（安装/配置/推送/升级）、订阅链接、流量统计。当用户提到代理面板、proxy panel、节点管理、用户流量、订阅链接、singbox-panel、panel.briqt.dev 时使用。也适用于：查看谁在用代理、给某人开通/关闭权限、推送配置到节点、查看流量统计、安装新节点。
 ---
 
 # singbox-panel Skill
@@ -9,227 +9,157 @@ description: 管理 singbox-panel 代理面板——用户管理（创建/启用
 
 ## 连接信息
 
-- **API 地址**: `https://panel.briqt.dev`
-- **认证**: 所有 `/api/*` 管理接口需要 `Authorization: Bearer <ADMIN_TOKEN>`
-- **Token 存储**: tokyo 服务器 `/opt/singbox-panel/.env` 中的 `ADMIN_TOKEN`
+- **API**: `https://panel.briqt.dev`
+- **Admin UI**: `https://panel.briqt.dev/admin`
+- **认证**: `Authorization: Bearer <TOKEN>`
+- **获取 Token**: `ssh tokyo 'grep ADMIN_TOKEN /opt/singbox-panel/.env' | cut -d= -f2`
 
-获取 token:
+## 支持的协议（仅此三种）
+
+| 协议 | 用途 | 需要域名 | 特点 |
+|------|------|---------|------|
+| hysteria2 | 日常高速 | 是 | UDP/QUIC, 最快 |
+| vless-reality | 稳定抗封 | 否 | TCP, 伪装正规网站, 零依赖 |
+| vless-httpupgrade | CDN 中转 | 是 | 用于被墙IP/IPv6-only节点 |
+
+## 核心流程
+
+### 新增节点（一键）
+
 ```bash
-ssh tokyo 'grep ADMIN_TOKEN /opt/singbox-panel/.env' | cut -d= -f2
+# 1. 创建节点
+POST /api/nodes
+{"name":"my-node", "host":"1.2.3.4", "domain":"node.example.com"}
+
+# 2. 配置 SSH（如果 tokyo 的 key 没在目标机器上）
+POST /api/nodes/{id}/setup-ssh
+{"password":"root密码"}
+
+# 3. 安装 sing-box
+POST /api/nodes/{id}/install
+{"version":"latest"}  或 {"version":"1.13.8"}
+
+# 4. 一键配置协议（自动选择、生成密钥、签证书、推送、启动）
+POST /api/nodes/{id}/auto-setup
+{"domain":"node.example.com"}
+# 有域名 → Hysteria2 + Reality
+# 无域名 → Reality only
+# 也可手动指定: {"protocols":["hysteria2","vless-reality","vless-httpupgrade"]}
 ```
-
-## 核心概念
-
-### 权限模型
-
-```
-用户注册（enabled=false, 无节点权限）
-  → 管理员启用（enabled=true）
-    → 管理员分配节点（grant access）
-      → 用户订阅显示可用节点
-        → push config 后节点端认证该用户
-```
-
-- 用户默认禁用，需管理员启用
-- 节点访问权限独立配置（grant/revoke per node）
-- 流量超限或过期 → 自动从节点配置中排除 → 连接被拒
-- push config 是使权限/用户变更生效的关键步骤
-
-### 配置生效流程
-
-面板数据变更（增删用户、改权限）不会立即影响节点。需要：
-1. 修改面板数据（用户/权限/inbound）
-2. `POST /api/nodes/{id}/push` 或 `POST /api/batch/push-all`
-3. 节点 sing-box 重启，新配置生效
-
-## API 参考
 
 ### 用户管理
 
 ```bash
-# 列出所有用户
-GET /api/users
+# 创建（管理员，默认启用）
+POST /api/users  {"name":"friend", "traffic_limit_bytes":107374182400}
 
-# 创建用户（管理员直接创建，默认启用）
-POST /api/users
-Body: {"name":"username", "uuid":"可选，不填自动生成", "traffic_limit_bytes": 107374182400, "expire_at": "2027-01-01 00:00:00"}
+# 注册（公开，默认禁用）
+POST /api/register  {"username":"someone", "password":"123456"}
 
-# 启用/禁用用户
-PUT /api/users/{id}
-Body: {"enabled": true}
+# 启用
+PUT /api/users/{id}  {"enabled":true}
 
-# 设置流量限额（bytes，0=无限）
-PUT /api/users/{id}
-Body: {"traffic_limit_bytes": 107374182400}
+# 授权所有节点
+POST /api/users/{id}/access  {"all":true}
 
-# 重置已用流量
-POST /api/users/{id}/reset-traffic
-
-# 重新生成订阅 token
-POST /api/users/{id}/reset-sub-token
-
-# 删除用户
-DELETE /api/users/{id}
-```
-
-### 节点访问控制
-
-```bash
-# 查看用户可访问的节点
-GET /api/users/{id}/access
-
-# 授权用户访问指定节点
-POST /api/users/{id}/access
-Body: {"node_id": 1}
-
-# 授权用户访问所有节点
-POST /api/users/{id}/access
-Body: {"all": true}
-
-# 撤销指定节点权限
-DELETE /api/users/{id}/access
-Body: {"node_id": 1}
-
-# 撤销所有节点权限
-DELETE /api/users/{id}/access
-Body: {"all": true}
-```
-
-### 节点管理
-
-```bash
-# 列出节点
-GET /api/nodes
-
-# 查看节点详情（含 inbounds）
-GET /api/nodes/{id}
-
-# 创建节点
-POST /api/nodes
-Body: {"name":"name", "host":"ip", "domain":"domain.briqt.dev", "port":22}
-
-# 更新节点
-PUT /api/nodes/{id}
-Body: {"domain":"new.briqt.dev", "enabled": true}
-
-# 添加协议
-POST /api/nodes/{id}/inbounds
-Body: {"tag":"hysteria2", "protocol":"hysteria2", "port":443, "settings":{...}}
-
-# 删除协议
-DELETE /api/inbounds/{id}
-```
-
-### 配置操作
-
-```bash
-# 预览生成的配置（不推送）
-POST /api/nodes/{id}/generate
-
-# 生成并推送配置到节点（会重启 sing-box）
-POST /api/nodes/{id}/push
-
-# 推送到所有 singbox 节点
+# 推送配置使生效
 POST /api/batch/push-all
 
-# 读取节点当前原始配置
-GET /api/nodes/{id}/raw-config
-
-# 写入自定义配置（覆盖模板）
-PUT /api/nodes/{id}/raw-config?restart=true
-Body: <完整 JSON 配置>
+# 订阅链接
+GET /sub/{sub_token}            # base64 (v2rayN/Shadowrocket)
+GET /sub/{sub_token}?format=clash  # Clash Meta YAML
 ```
+
+### 常用操作
+
+```bash
+# 查看所有节点状态
+GET /api/nodes/{id}/status  → {reachable, installed, version, running}
+
+# 升级 sing-box
+POST /api/nodes/{id}/install  {"version":"latest"}
+
+# DNS 校验
+GET /api/validate/dns?domain=x.briqt.dev&ip=1.2.3.4
+
+# 手动签证书
+POST /api/nodes/{id}/cert?domain=x.briqt.dev
+
+# 查看/编辑原始配置
+GET /api/nodes/{id}/raw-config
+PUT /api/nodes/{id}/raw-config?restart=true  (body=完整JSON)
+
+# 流量统计
+GET /api/stats/users
+GET /api/stats/nodes
+
+# 重置流量
+POST /api/users/{id}/reset-traffic
+```
+
+## 完整 API 列表
+
+### 用户
+- `GET /api/users` — 列表
+- `POST /api/users` — 创建
+- `PUT /api/users/{id}` — 更新 (name/enabled/traffic_limit_bytes/expire_at)
+- `DELETE /api/users/{id}` — 删除
+- `POST /api/users/{id}/reset-traffic` — 重置流量
+- `POST /api/users/{id}/reset-sub-token` — 重置订阅令牌
+
+### 访问控制
+- `GET /api/users/{id}/access` — 查看可访问节点
+- `POST /api/users/{id}/access` — 授权 ({node_id} 或 {all:true})
+- `DELETE /api/users/{id}/access` — 撤销 ({node_id} 或 {all:true})
+
+### 节点
+- `GET /api/nodes` / `POST /api/nodes` / `PUT /api/nodes/{id}` / `DELETE /api/nodes/{id}`
+- `GET /api/nodes/{id}` — 详情含 inbounds
+- `POST /api/nodes/{id}/inbounds` — 手动添加协议
+- `DELETE /api/inbounds/{id}` — 删除协议
+
+### 节点运维
+- `GET /api/nodes/{id}/status` — SSH 连通性 + sing-box 状态
+- `GET /api/nodes/{id}/version` — sing-box 版本
+- `POST /api/nodes/{id}/setup-ssh` — 注入公钥 ({password})
+- `POST /api/nodes/{id}/install` — 安装/升级 sing-box ({version})
+- `POST /api/nodes/{id}/auto-setup` — 一键配置 ({domain, protocols, ports})
+- `POST /api/nodes/{id}/cert` — 签发证书 (?domain=)
+
+### 配置
+- `POST /api/nodes/{id}/generate` — 预览配置
+- `POST /api/nodes/{id}/push` — 推送并重启
+- `POST /api/batch/push-all` — 推送所有节点
+- `GET /api/nodes/{id}/raw-config` — 读取原始配置
+- `PUT /api/nodes/{id}/raw-config?restart=true` — 写入原始配置
+
+### 校验
+- `GET /api/validate/dns?domain=X&ip=Y` — DNS 解析校验
 
 ### 订阅
-
-```bash
-# 用户订阅（base64 URI 格式，兼容 v2rayN/Shadowrocket）
-GET /sub/{sub_token}
-
-# Clash 格式（自动检测 UA 或手动指定）
-GET /sub/{sub_token}?format=clash
-```
+- `GET /sub/{token}` — 订阅 (自动识别客户端格式)
+- `GET /sub/{token}?format=clash` — 强制 Clash 格式
 
 ### 统计
+- `GET /api/stats/users` — 用户流量
+- `GET /api/stats/nodes` — 节点流量
 
-```bash
-# 用户流量概览
-GET /api/stats/users
-
-# 节点流量概览
-GET /api/stats/nodes
-```
-
-### 公开注册
-
-```bash
-# 用户自助注册（默认禁用，需管理员启用+授权节点）
-POST /api/register
-Body: {"username":"newuser", "password":"123456"}
-```
-
-## 常用操作组合
-
-### 给朋友开通代理
-
-```bash
-# 1. 创建用户（100GB 限额，一年有效期）
-POST /api/users {"name":"friend", "traffic_limit_bytes":107374182400, "expire_at":"2027-06-21 00:00:00"}
-# 2. 授权所有节点
-POST /api/users/{id}/access {"all":true}
-# 3. 推送配置使生效
-POST /api/batch/push-all
-# 4. 给朋友发订阅链接
-# https://panel.briqt.dev/sub/{sub_token}
-```
-
-### 某人流量超限，重置
-
-```bash
-POST /api/users/{id}/reset-traffic
-POST /api/batch/push-all  # 重新加入节点配置
-```
-
-### 关闭某人的代理
-
-```bash
-PUT /api/users/{id} {"enabled":false}
-POST /api/batch/push-all  # 从节点移除
-```
-
-### 查看系统状态
-
-```bash
-GET /api/stats/users   # 各用户流量
-GET /api/stats/nodes   # 各节点流量
-GET /api/users         # 所有用户列表
-GET /api/nodes         # 所有节点列表
-```
+### 公开
+- `POST /api/register` — 用户注册 ({username, password})
+- `GET /api/health` — 健康检查
 
 ## 节点信息
 
-| 节点 | IP | 协议 | 域名 |
+| 节点 | IP | 域名 | 状态 |
 |------|-----|------|------|
-| tokyo | 154.83.93.162 | Vision+Hy2+Reality | jpiij.briqt.dev |
-| laxpro | 23.158.136.46 | Vision+Hy2+Reality | laxpro.briqt.dev |
-| lax02 | 192.129.134.166 | Vision+Hy2+Reality | lax02.briqt.dev |
-| de | 2a01:4f8:242:1d0e::1461:158 | xray (WS+Reality) | de.briqt.dev |
-| lax03 | 72.11.134.212 | Reality only | — |
+| tokyo | 154.83.93.162 | jpiij.briqt.dev | 面板服务器 |
+| laxpro | 23.158.136.46 | laxpro.briqt.dev | 运行中 |
+| lax03 | 192.129.134.166 | lax02.briqt.dev | 面板已接管 |
+| de | 2a01:4f8:242:1d0e::1461:158 | de.briqt.dev | IPv6/ProxyJump |
 
-## 部署信息
+## 部署
 
-- 项目仓库: `github.com/briqt/singbox-panel`
-- 运行位置: tokyo `/opt/singbox-panel/`
-- 服务: systemd `singbox-panel.service`
-- 反代: Caddy (`panel.briqt.dev` → `127.0.0.1:2082`)
-- 数据库: SQLite at `/opt/singbox-panel/data/panel.db`
-
-### 重新部署
-
-```bash
-cd /home/briqt/codes/singbox-panel
-GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/singbox-panel .
-ssh tokyo 'systemctl stop singbox-panel'
-scp bin/singbox-panel tokyo:/opt/singbox-panel/singbox-panel
-ssh tokyo 'systemctl start singbox-panel'
-```
+- 仓库: `github.com/briqt/singbox-panel`
+- 服务: tokyo `/opt/singbox-panel/`, systemd `singbox-panel.service`
+- 反代: Caddy `panel.briqt.dev → 127.0.0.1:2082`
+- 安装 skill: `npx skills add briqt/singbox-panel -g -y`
