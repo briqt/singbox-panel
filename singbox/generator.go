@@ -13,15 +13,6 @@ func GenerateConfig(users []model.User, inbounds []model.NodeInbound) ([]byte, e
 			"level":     "info",
 			"timestamp": true,
 		},
-		"experimental": map[string]any{
-			"v2ray_api": map[string]any{
-				"listen": "127.0.0.1:15555",
-				"stats": map[string]any{
-					"enabled": true,
-					"users":   userNames(users),
-				},
-			},
-		},
 		"inbounds":  buildInbounds(users, inbounds),
 		"outbounds": []map[string]any{{"type": "direct", "tag": "direct"}},
 	}
@@ -172,7 +163,6 @@ func buildRealityFromSettings(settings map[string]any) map[string]any {
 			"private_key": privateKey,
 			"short_id":    []string{shortID},
 			"handshake": map[string]any{
-				"type":        "tcp",
 				"server":      handshakeDest,
 				"server_port": handshakePort,
 			},
