@@ -36,6 +36,7 @@ func main() {
 	authHandler := &handler.AuthHandler{Users: userStore, AdminToken: cfg.AdminToken}
 	accessHandler := &handler.AccessHandler{Access: accessStore, Nodes: nodeStore}
 	nodeOpsHandler := &handler.NodeOpsHandler{Nodes: nodeStore, Config: configHandler}
+	setupHandler := &handler.SetupHandler{Nodes: nodeStore, Config: configHandler, Ops: nodeOpsHandler}
 
 	mux := http.NewServeMux()
 
@@ -76,6 +77,8 @@ func main() {
 			nodeOpsHandler.ServeHTTP(w, r)
 		} else if strings.HasSuffix(path, "/cert") {
 			validateHandler.HandleCertInstall(w, r)
+		} else if strings.HasSuffix(path, "/auto-setup") {
+			setupHandler.HandleAutoSetup(w, r)
 		} else {
 			nodeHandler.ServeHTTP(w, r)
 		}
