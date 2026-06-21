@@ -31,6 +31,8 @@ func migrate(db *sql.DB) error {
 	db.Exec(`ALTER TABLE nodes ADD COLUMN domain TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE users ADD COLUMN password TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE nodes ADD COLUMN ssh_password TEXT NOT NULL DEFAULT ''`)
+	db.Exec(`ALTER TABLE users ADD COLUMN traffic_reset_day INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE users ADD COLUMN traffic_last_reset TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 
