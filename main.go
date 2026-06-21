@@ -33,15 +33,18 @@ func main() {
 		AdminPass: cfg.AdminPass, JWTSecret: cfg.JWTSecret,
 	}
 	meHandler := &handler.MeHandler{Users: userStore, Nodes: nodeStore, Access: accessStore}
-	userHandler := &handler.UserHandler{Store: userStore}
 	nodeHandler := &handler.NodeHandler{Store: nodeStore}
 	subHandler := &handler.SubscriptionHandler{Users: userStore, Nodes: nodeStore, Access: accessStore}
 	configHandler := &handler.ConfigHandler{Users: userStore, Nodes: nodeStore, Access: accessStore, SSHKeyPath: cfg.SSHKeyPath}
 	batchHandler := &handler.BatchHandler{Nodes: nodeStore, Config: configHandler}
+	userHandler := &handler.UserHandler{Store: userStore, Nodes: nodeStore, Batch: batchHandler}
 	accessHandler := &handler.AccessHandler{Access: accessStore, Nodes: nodeStore}
 	nodeOpsHandler := &handler.NodeOpsHandler{Nodes: nodeStore, Config: configHandler}
 	setupHandler := &handler.SetupHandler{Nodes: nodeStore, Config: configHandler, Ops: nodeOpsHandler}
 	validateHandler := &handler.ValidateHandler{Config: configHandler}
+
+	trafficPoller := &handler.TrafficPoller{Nodes: nodeStore, Users: userStore, Config: configHandler}
+	trafficPoller.Start()
 
 	admin := authHandler.AdminOnly
 	auth := authHandler.JWTAuth
@@ -86,6 +89,7 @@ func main() {
 
 	// Admin: Node CRUD + ops
 	mux.HandleFunc("/api/nodes", admin(nodeHandler.ServeHTTP))
+	mux.HandleFunc("/api/nodes/reorder", admin(nodeHandler.Reorder))
 	mux.HandleFunc("/api/nodes/", admin(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if strings.HasSuffix(path, "/generate") || strings.HasSuffix(path, "/push") ||
@@ -97,8 +101,12 @@ func main() {
 			nodeOpsHandler.ServeHTTP(w, r)
 		} else if strings.HasSuffix(path, "/cert") {
 			validateHandler.HandleCertInstall(w, r)
+		} else if strings.HasSuffix(path, "/cert-upload") {
+			validateHandler.HandleCertUpload(w, r)
 		} else if strings.HasSuffix(path, "/auto-setup") {
 			setupHandler.HandleAutoSetup(w, r)
+		} else if strings.HasSuffix(path, "/inbounds/reorder") {
+			nodeHandler.ReorderInbounds(w, r)
 		} else {
 			nodeHandler.ServeHTTP(w, r)
 		}
@@ -111,6 +119,7 @@ func main() {
 	mux.HandleFunc("/api/batch/template", admin(batchHandler.ApplyTemplate))
 	mux.HandleFunc("/api/stats/users", admin(configHandler.HandleUserStats))
 	mux.HandleFunc("/api/stats/nodes", admin(configHandler.HandleNodeStats))
+	mux.HandleFunc("/api/stats/traffic", admin(configHandler.HandleTrafficHistory))
 
 	// Traffic report from node agents (auth via X-Node-Token)
 	mux.HandleFunc("/api/node/report", configHandler.HandleTrafficReport)

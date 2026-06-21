@@ -18,17 +18,19 @@ type Node struct {
 	SingboxBin  string `json:"singbox_bin"`
 	AgentToken  string `json:"agent_token"`
 	Enabled     bool   `json:"enabled"`
+	SortOrder   int    `json:"sort_order"`
 	CreatedAt   string `json:"created_at"`
 }
 
 type NodeInbound struct {
-	ID       int             `json:"id"`
-	NodeID   int             `json:"node_id"`
-	Tag      string          `json:"tag"`
-	Protocol string          `json:"protocol"`
-	Port     int             `json:"port"`
-	Settings json.RawMessage `json:"settings"`
-	Enabled  bool            `json:"enabled"`
+	ID        int             `json:"id"`
+	NodeID    int             `json:"node_id"`
+	Tag       string          `json:"tag"`
+	Protocol  string          `json:"protocol"`
+	Port      int             `json:"port"`
+	Settings  json.RawMessage `json:"settings"`
+	Enabled   bool            `json:"enabled"`
+	SortOrder int             `json:"sort_order"`
 }
 
 type NodeWithInbounds struct {
@@ -41,7 +43,7 @@ type NodeStore struct {
 }
 
 func (s *NodeStore) List() ([]Node, error) {
-	rows, err := s.DB.Query(`SELECT id, name, host, port, domain, ssh_user, COALESCE(ssh_password,''), proxy_type, config_path, singbox_bin, agent_token, enabled, created_at FROM nodes ORDER BY id`)
+	rows, err := s.DB.Query(`SELECT id, name, host, port, domain, ssh_user, COALESCE(ssh_password,''), proxy_type, config_path, singbox_bin, agent_token, enabled, COALESCE(sort_order,0), created_at FROM nodes ORDER BY sort_order, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +52,7 @@ func (s *NodeStore) List() ([]Node, error) {
 	for rows.Next() {
 		var n Node
 		var enabled int
-		if err := rows.Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Domain, &n.SSHUser, &n.SSHPassword, &n.ProxyType, &n.ConfigPath, &n.SingboxBin, &n.AgentToken, &enabled, &n.CreatedAt); err != nil {
+		if err := rows.Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Domain, &n.SSHUser, &n.SSHPassword, &n.ProxyType, &n.ConfigPath, &n.SingboxBin, &n.AgentToken, &enabled, &n.SortOrder, &n.CreatedAt); err != nil {
 			return nil, err
 		}
 		n.Enabled = enabled == 1
@@ -62,8 +64,8 @@ func (s *NodeStore) List() ([]Node, error) {
 func (s *NodeStore) Get(id int) (*Node, error) {
 	var n Node
 	var enabled int
-	err := s.DB.QueryRow(`SELECT id, name, host, port, domain, ssh_user, COALESCE(ssh_password,''), proxy_type, config_path, singbox_bin, agent_token, enabled, created_at FROM nodes WHERE id = ?`, id).
-		Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Domain, &n.SSHUser, &n.SSHPassword, &n.ProxyType, &n.ConfigPath, &n.SingboxBin, &n.AgentToken, &enabled, &n.CreatedAt)
+	err := s.DB.QueryRow(`SELECT id, name, host, port, domain, ssh_user, COALESCE(ssh_password,''), proxy_type, config_path, singbox_bin, agent_token, enabled, COALESCE(sort_order,0), created_at FROM nodes WHERE id = ?`, id).
+		Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Domain, &n.SSHUser, &n.SSHPassword, &n.ProxyType, &n.ConfigPath, &n.SingboxBin, &n.AgentToken, &enabled, &n.SortOrder, &n.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -131,6 +133,7 @@ type UpdateNodeReq struct {
 	Enabled     *bool   `json:"enabled"`
 	ConfigPath  *string `json:"config_path"`
 	SingboxBin  *string `json:"singbox_bin"`
+	SortOrder   *int    `json:"sort_order"`
 }
 
 func (s *NodeStore) Update(id int, req UpdateNodeReq) (*Node, error) {
@@ -168,6 +171,9 @@ func (s *NodeStore) Update(id int, req UpdateNodeReq) (*Node, error) {
 	if req.SingboxBin != nil {
 		s.DB.Exec(`UPDATE nodes SET singbox_bin = ? WHERE id = ?`, *req.SingboxBin, id)
 	}
+	if req.SortOrder != nil {
+		s.DB.Exec(`UPDATE nodes SET sort_order = ? WHERE id = ?`, *req.SortOrder, id)
+	}
 	return s.Get(id)
 }
 
@@ -177,7 +183,7 @@ func (s *NodeStore) Delete(id int) error {
 }
 
 func (s *NodeStore) ListInbounds(nodeID int) ([]NodeInbound, error) {
-	rows, err := s.DB.Query(`SELECT id, node_id, tag, protocol, port, settings, enabled FROM node_inbounds WHERE node_id = ? ORDER BY id`, nodeID)
+	rows, err := s.DB.Query(`SELECT id, node_id, tag, protocol, port, settings, enabled, COALESCE(sort_order,0) FROM node_inbounds WHERE node_id = ? ORDER BY sort_order, id`, nodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +193,7 @@ func (s *NodeStore) ListInbounds(nodeID int) ([]NodeInbound, error) {
 		var ib NodeInbound
 		var enabled int
 		var settings string
-		if err := rows.Scan(&ib.ID, &ib.NodeID, &ib.Tag, &ib.Protocol, &ib.Port, &settings, &enabled); err != nil {
+		if err := rows.Scan(&ib.ID, &ib.NodeID, &ib.Tag, &ib.Protocol, &ib.Port, &settings, &enabled, &ib.SortOrder); err != nil {
 			return nil, err
 		}
 		ib.Enabled = enabled == 1
@@ -239,8 +245,8 @@ func (s *NodeStore) GetByToken(token string) (*Node, error) {
 	}
 	var n Node
 	var enabled int
-	err := s.DB.QueryRow(`SELECT id, name, host, port, domain, ssh_user, COALESCE(ssh_password,''), proxy_type, config_path, singbox_bin, agent_token, enabled, created_at FROM nodes WHERE agent_token = ?`, token).
-		Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Domain, &n.SSHUser, &n.SSHPassword, &n.ProxyType, &n.ConfigPath, &n.SingboxBin, &n.AgentToken, &enabled, &n.CreatedAt)
+	err := s.DB.QueryRow(`SELECT id, name, host, port, domain, ssh_user, COALESCE(ssh_password,''), proxy_type, config_path, singbox_bin, agent_token, enabled, COALESCE(sort_order,0), created_at FROM nodes WHERE agent_token = ?`, token).
+		Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Domain, &n.SSHUser, &n.SSHPassword, &n.ProxyType, &n.ConfigPath, &n.SingboxBin, &n.AgentToken, &enabled, &n.SortOrder, &n.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -259,8 +265,25 @@ func (s *NodeStore) GetTrafficSum(nodeID int) (up, down int64) {
 	return
 }
 
+type ReorderItem struct {
+	ID        int `json:"id"`
+	SortOrder int `json:"sort_order"`
+}
+
+func (s *NodeStore) ReorderNodes(items []ReorderItem) {
+	for _, item := range items {
+		s.DB.Exec(`UPDATE nodes SET sort_order = ? WHERE id = ?`, item.SortOrder, item.ID)
+	}
+}
+
+func (s *NodeStore) ReorderInbounds(items []ReorderItem) {
+	for _, item := range items {
+		s.DB.Exec(`UPDATE node_inbounds SET sort_order = ? WHERE id = ?`, item.SortOrder, item.ID)
+	}
+}
+
 func (s *NodeStore) ListEnabled() ([]Node, error) {
-	rows, err := s.DB.Query(`SELECT id, name, host, port, domain, ssh_user, COALESCE(ssh_password,''), proxy_type, config_path, singbox_bin, agent_token, enabled, created_at FROM nodes WHERE enabled = 1 ORDER BY id`)
+	rows, err := s.DB.Query(`SELECT id, name, host, port, domain, ssh_user, COALESCE(ssh_password,''), proxy_type, config_path, singbox_bin, agent_token, enabled, COALESCE(sort_order,0), created_at FROM nodes WHERE enabled = 1 ORDER BY sort_order, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +292,7 @@ func (s *NodeStore) ListEnabled() ([]Node, error) {
 	for rows.Next() {
 		var n Node
 		var enabled int
-		if err := rows.Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Domain, &n.SSHUser, &n.SSHPassword, &n.ProxyType, &n.ConfigPath, &n.SingboxBin, &n.AgentToken, &enabled, &n.CreatedAt); err != nil {
+		if err := rows.Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Domain, &n.SSHUser, &n.SSHPassword, &n.ProxyType, &n.ConfigPath, &n.SingboxBin, &n.AgentToken, &enabled, &n.SortOrder, &n.CreatedAt); err != nil {
 			return nil, err
 		}
 		n.Enabled = enabled == 1

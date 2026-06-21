@@ -63,9 +63,12 @@ func (h *SubscriptionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Subscription-Userinfo header
-	upload := user.TrafficUsedBytes / 2
-	download := user.TrafficUsedBytes / 2
+	upload := user.TrafficUpBytes
+	download := user.TrafficDownBytes
 	total := user.TrafficLimitBytes
+	if total == 0 {
+		total = 1099511627776 // 1TB placeholder for unlimited
+	}
 	userinfo := fmt.Sprintf("upload=%d; download=%d; total=%d", upload, download, total)
 	if user.ExpireAt != "" {
 		if t, err := time.Parse("2006-01-02 15:04:05", user.ExpireAt); err == nil {
