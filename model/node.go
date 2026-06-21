@@ -126,6 +126,8 @@ type UpdateNodeReq struct {
 	Port        *int    `json:"port"`
 	Domain      *string `json:"domain"`
 	SSHPassword *string `json:"ssh_password"`
+	SSHUser     *string `json:"ssh_user"`
+	ProxyType   *string `json:"proxy_type"`
 	Enabled     *bool   `json:"enabled"`
 	ConfigPath  *string `json:"config_path"`
 	SingboxBin  *string `json:"singbox_bin"`
@@ -146,6 +148,12 @@ func (s *NodeStore) Update(id int, req UpdateNodeReq) (*Node, error) {
 	}
 	if req.SSHPassword != nil {
 		s.DB.Exec(`UPDATE nodes SET ssh_password = ? WHERE id = ?`, *req.SSHPassword, id)
+	}
+	if req.SSHUser != nil {
+		s.DB.Exec(`UPDATE nodes SET ssh_user = ? WHERE id = ?`, *req.SSHUser, id)
+	}
+	if req.ProxyType != nil {
+		s.DB.Exec(`UPDATE nodes SET proxy_type = ? WHERE id = ?`, *req.ProxyType, id)
 	}
 	if req.Enabled != nil {
 		enabled := 0

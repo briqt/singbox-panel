@@ -11,6 +11,8 @@
 ::-webkit-scrollbar{width:6px;height:6px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:3px}
+.spin{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body class="bg-gray-50 text-gray-700 min-h-screen antialiased">
@@ -20,10 +22,10 @@
 <div class="fixed bottom-4 right-4 z-[100] space-y-2">
   <template x-for="t in toasts" :key="t.id">
     <div :class="t.type==='error'?'border-red-200 bg-red-50 text-red-700':'border-emerald-200 bg-emerald-50 text-emerald-700'"
-         class="px-4 py-2.5 rounded-lg text-sm border flex items-center gap-2 shadow-lg"
-         x-init="setTimeout(()=>toasts=toasts.filter(x=>x.id!==t.id),3000)">
-      <span x-text="t.type==='error'?'✕':'✓'" class="text-xs font-bold"></span>
-      <span x-text="t.msg"></span>
+         class="px-4 py-2.5 rounded-lg text-sm border flex items-center gap-2 shadow-lg max-w-sm"
+         x-init="setTimeout(()=>toasts=toasts.filter(x=>x.id!==t.id),4000)">
+      <span x-text="t.type==='error'?'✕':'✓'" class="text-xs font-bold flex-shrink-0"></span>
+      <span x-text="t.msg" class="break-all"></span>
     </div>
   </template>
 </div>
@@ -66,7 +68,7 @@
   </header>
 
   <!-- Content -->
-  <main class="max-w-4xl mx-auto px-6 py-6">
+  <main class="max-w-5xl mx-auto px-6 py-6">
 
   <!-- Overview -->
   <div x-show="tab==='dash'">
@@ -169,38 +171,64 @@
   <div x-show="tab==='nodes'">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-lg font-semibold text-gray-900" x-text="T('nodes')"></h2>
-      <button @click="pushAll()" class="px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs rounded-lg transition" x-text="T('pushAll')"></button>
+      <div class="flex items-center gap-2">
+        <button @click="showCreateNode=true" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition" x-text="'+ '+T('newNode')"></button>
+        <button @click="pushAll()" class="px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs rounded-lg transition" x-text="T('pushAll')"></button>
+      </div>
     </div>
-    <div class="space-y-2">
+    <div class="space-y-3">
       <template x-for="n in nodes" :key="n.id">
         <div class="bg-white border border-gray-200 rounded-xl overflow-hidden">
-          <div class="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-gray-50 transition" @click="toggleNodeDetail(n)">
+          <div class="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-gray-50/50 transition" @click="toggleNodeDetail(n)">
             <div class="flex items-center gap-3">
               <span :class="n.enabled?'bg-emerald-500':'bg-gray-300'" class="w-2 h-2 rounded-full"></span>
               <span x-text="n.name" class="text-gray-900 font-medium text-sm"></span>
-              <span x-text="n.domain||n.host" class="text-xs text-gray-400 font-mono"></span>
+              <span x-text="n.domain||''" class="text-xs text-blue-500 font-mono"></span>
+              <span x-text="n.host" class="text-xs text-gray-400 font-mono"></span>
             </div>
-            <div class="flex items-center gap-2">
-              <button @click.stop="pushNode(n)" class="px-2 py-1 text-xs border border-gray-200 hover:bg-gray-50 text-gray-600 rounded transition" x-text="T('push')"></button>
-              <button @click.stop="generateNode(n)" class="px-2 py-1 text-xs border border-gray-200 hover:bg-gray-50 text-gray-600 rounded transition" x-text="T('preview')"></button>
+            <div class="flex items-center gap-1">
+              <template x-if="nodeStatuses[n.id]">
+                <div class="flex items-center gap-1.5 mr-2">
+                  <span :class="nodeStatuses[n.id].running?'bg-emerald-500':'bg-yellow-400'" class="w-1.5 h-1.5 rounded-full"></span>
+                  <span class="text-[10px] text-gray-400" x-text="nodeStatuses[n.id].version||T('notInstalled')"></span>
+                </div>
+              </template>
               <span class="text-gray-300 text-xs" x-text="expandedNode===n.id?'▾':'▸'"></span>
             </div>
           </div>
-          <div x-show="expandedNode===n.id" class="border-t border-gray-100 px-4 py-3 bg-gray-50/50">
-            <div class="text-xs text-gray-400 mb-2" x-text="T('inbounds')"></div>
-            <template x-if="nodeDetail&&nodeDetail.id===n.id">
-              <div class="space-y-1">
-                <template x-for="ib in nodeDetail.inbounds||[]" :key="ib.id">
-                  <div class="flex items-center gap-3 text-xs py-1">
-                    <span class="text-gray-500 font-mono w-28" x-text="ib.protocol"></span>
-                    <span class="text-gray-300">:</span>
-                    <span class="text-gray-700 font-mono" x-text="ib.port"></span>
-                    <span class="text-gray-400" x-text="ib.tag"></span>
-                  </div>
-                </template>
-                <div x-show="!nodeDetail.inbounds||nodeDetail.inbounds.length===0" class="text-xs text-gray-400 italic" x-text="T('noInbounds')"></div>
-              </div>
-            </template>
+          <!-- Expanded Detail -->
+          <div x-show="expandedNode===n.id" class="border-t border-gray-100">
+            <!-- Action Buttons -->
+            <div class="px-4 py-3 bg-gray-50/80 flex flex-wrap items-center gap-2 border-b border-gray-100">
+              <button @click.stop="checkNodeStatus(n)" class="px-2.5 py-1.5 text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-md transition" x-text="T('checkStatus')"></button>
+              <button @click.stop="showSetupSSHModal(n)" class="px-2.5 py-1.5 text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-md transition" x-text="T('setupSSH')"></button>
+              <button @click.stop="installSingbox(n)" class="px-2.5 py-1.5 text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-md transition" x-text="T('install')"></button>
+              <button @click.stop="showAutoSetupModal(n)" class="px-2.5 py-1.5 text-xs border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-md transition font-medium" x-text="T('autoSetup')"></button>
+              <div class="flex-1"></div>
+              <button @click.stop="pushNode(n)" class="px-2.5 py-1.5 text-xs border border-orange-200 bg-orange-50 hover:bg-orange-100 text-orange-700 rounded-md transition" x-text="T('push')"></button>
+              <button @click.stop="generateNode(n)" class="px-2.5 py-1.5 text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-md transition" x-text="T('preview')"></button>
+              <button @click.stop="showRawConfig(n)" class="px-2.5 py-1.5 text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-md transition" x-text="T('rawConfig')"></button>
+              <button @click.stop="deleteNode(n)" class="px-2.5 py-1.5 text-xs border border-red-200 bg-white hover:bg-red-50 text-red-500 rounded-md transition" x-text="T('del')"></button>
+            </div>
+            <!-- Inbounds -->
+            <div class="px-4 py-3">
+              <div class="text-xs text-gray-400 mb-2 font-medium" x-text="T('inbounds')"></div>
+              <template x-if="nodeDetail&&nodeDetail.id===n.id">
+                <div class="space-y-1">
+                  <template x-for="ib in nodeDetail.inbounds||[]" :key="ib.id">
+                    <div class="flex items-center gap-3 text-xs py-1.5 px-2 rounded hover:bg-gray-50">
+                      <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium"
+                            :class="ib.protocol==='hysteria2'?'bg-purple-100 text-purple-700':ib.protocol==='vless-reality'?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'"
+                            x-text="ib.protocol"></span>
+                      <span class="text-gray-700 font-mono" x-text="':'+ib.port"></span>
+                      <span class="text-gray-400" x-text="ib.tag"></span>
+                      <button @click.stop="deleteInbound(ib)" class="ml-auto text-red-300 hover:text-red-500 transition text-[10px]">✕</button>
+                    </div>
+                  </template>
+                  <div x-show="!nodeDetail.inbounds||nodeDetail.inbounds.length===0" class="text-xs text-gray-400 italic py-1" x-text="T('noInbounds')"></div>
+                </div>
+              </template>
+            </div>
           </div>
         </div>
       </template>
@@ -256,6 +284,28 @@
     </div>
   </div>
 
+  <!-- Create Node Modal -->
+  <div x-show="showCreateNode" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" @click.self="showCreateNode=false">
+    <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-md shadow-xl">
+      <h3 class="text-sm font-semibold text-gray-900 mb-4" x-text="T('newNode')"></h3>
+      <div class="space-y-3">
+        <input x-model="newNode.name" :placeholder="T('nodeName')" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400">
+        <input x-model="newNode.host" placeholder="IP (e.g. 1.2.3.4)" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400">
+        <input x-model="newNode.domain" :placeholder="T('domainOptional')" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400">
+        <div class="grid grid-cols-2 gap-3">
+          <div class="flex items-center gap-2">
+            <input x-model.number="newNode.port" type="number" placeholder="SSH Port" class="flex-1 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition">
+          </div>
+          <input x-model="newNode.ssh_user" placeholder="SSH User (root)" class="px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400">
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 mt-5">
+        <button @click="showCreateNode=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition" x-text="T('cancel')"></button>
+        <button @click="createNode()" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition" x-text="T('create')"></button>
+      </div>
+    </div>
+  </div>
+
   <!-- Access Modal -->
   <div x-show="showAccess" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" @click.self="showAccess=false">
     <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-sm shadow-xl">
@@ -278,6 +328,75 @@
     </div>
   </div>
 
+  <!-- Setup SSH Modal -->
+  <div x-show="showSSHSetup" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" @click.self="showSSHSetup=false">
+    <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-sm shadow-xl">
+      <h3 class="text-sm font-semibold text-gray-900 mb-1" x-text="T('setupSSH')"></h3>
+      <p class="text-xs text-gray-400 mb-4" x-text="sshNode?sshNode.name+' ('+sshNode.host+')':''"></p>
+      <input x-model="sshPassword" type="password" :placeholder="T('rootPassword')" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400"
+             @keydown.enter="doSetupSSH()">
+      <p class="text-[11px] text-gray-400 mt-2" x-text="T('sshHint')"></p>
+      <div class="flex justify-end gap-2 mt-4">
+        <button @click="showSSHSetup=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition" x-text="T('cancel')"></button>
+        <button @click="doSetupSSH()" :disabled="opLoading" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition disabled:opacity-50" x-text="opLoading?T('working'):T('confirm')"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auto Setup Modal -->
+  <div x-show="showAutoSetup" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" @click.self="showAutoSetup=false">
+    <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-md shadow-xl">
+      <h3 class="text-sm font-semibold text-gray-900 mb-1" x-text="T('autoSetup')"></h3>
+      <p class="text-xs text-gray-400 mb-4" x-text="autoSetupNode?autoSetupNode.name:''"></p>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block" x-text="T('domain')"></label>
+          <input x-model="autoSetupDomain" :placeholder="T('domainOptional')" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400">
+          <p class="text-[11px] text-gray-400 mt-1" x-text="T('autoSetupDomainHint')"></p>
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 mb-1.5 block" x-text="T('protocols')"></label>
+          <div class="space-y-1.5">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" x-model="autoSetupProtos" value="hysteria2" class="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-0">
+              <span class="text-sm text-gray-700">Hysteria2</span>
+              <span class="text-[10px] text-gray-400 ml-1" x-text="T('needsDomain')"></span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" x-model="autoSetupProtos" value="vless-reality" class="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-0">
+              <span class="text-sm text-gray-700">VLESS Reality</span>
+              <span class="text-[10px] text-gray-400 ml-1" x-text="T('noDomain')"></span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" x-model="autoSetupProtos" value="vless-httpupgrade" class="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-0">
+              <span class="text-sm text-gray-700">VLESS HTTPUpgrade</span>
+              <span class="text-[10px] text-gray-400 ml-1" x-text="T('forCDN')"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 mt-5">
+        <button @click="showAutoSetup=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition" x-text="T('cancel')"></button>
+        <button @click="doAutoSetup()" :disabled="opLoading" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition disabled:opacity-50" x-text="opLoading?T('working'):T('startSetup')"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Raw Config Modal -->
+  <div x-show="showRawCfg" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" @click.self="showRawCfg=false">
+    <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-2xl shadow-xl max-h-[80vh] flex flex-col">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-semibold text-gray-900" x-text="T('rawConfig')+' — '+(rawCfgNode?rawCfgNode.name:'')"></h3>
+        <button @click="showRawCfg=false" class="text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>
+      </div>
+      <textarea x-model="rawCfgContent" class="flex-1 w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs font-mono focus:outline-none focus:border-blue-500 transition resize-none min-h-[300px]" spellcheck="false"></textarea>
+      <div class="flex justify-end gap-2 mt-3">
+        <button @click="showRawCfg=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition" x-text="T('cancel')"></button>
+        <button @click="saveRawConfig()" :disabled="opLoading" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition disabled:opacity-50" x-text="opLoading?T('working'):T('saveRestart')"></button>
+      </div>
+    </div>
+  </div>
+
   </main>
 </div>
 </template>
@@ -288,15 +407,27 @@ function fmtBytes(b){if(!b||b===0)return'0 B';const u=['B','KB','MB','GB','TB'];
 
 const I18N={
   en:{overview:'Overview',users:'Users',nodes:'Nodes',stats:'Stats',signOut:'Sign out',signIn:'Sign In',loginHint:'Admin access required',token:'Token',
-    totalTraffic:'Total Traffic',user:'User',traffic:'Traffic',expires:'Expires',subscription:'Sub',actions:'Actions',newUser:'New User',
-    copyLink:'copy link',access:'access',reset:'reset',del:'del',push:'push',preview:'preview',pushAll:'Push All',inbounds:'Inbounds',
-    noInbounds:'No inbounds configured',trafficStats:'Traffic Stats',used:'Used',limit:'Limit',usage:'Usage',
-    username:'Username',cancel:'Cancel',create:'Create',nodeAccess:'Node Access',grantAll:'Grant All',done:'Done'},
+    totalTraffic:'Total Traffic',user:'User',traffic:'Traffic',expires:'Expires',subscription:'Sub',actions:'Actions',newUser:'New User',newNode:'New Node',
+    copyLink:'copy link',access:'access',reset:'reset',del:'del',push:'Push',preview:'Preview',pushAll:'Push All',inbounds:'Inbounds',
+    noInbounds:'No inbounds — use Auto Setup to configure protocols',trafficStats:'Traffic Stats',used:'Used',limit:'Limit',usage:'Usage',
+    username:'Username',cancel:'Cancel',create:'Create',nodeAccess:'Node Access',grantAll:'Grant All',done:'Done',
+    nodeName:'Node name',domainOptional:'Domain (optional, for Hysteria2/HTTPUpgrade)',
+    setupSSH:'Setup SSH',install:'Install',autoSetup:'Auto Setup',checkStatus:'Status',rawConfig:'Raw Config',
+    rootPassword:'Root password',sshHint:'Inject panel SSH key to the node for key-based auth',confirm:'Confirm',working:'Working...',
+    domain:'Domain',protocols:'Protocols',needsDomain:'needs domain',noDomain:'no domain needed',forCDN:'for CDN/blocked IP',
+    autoSetupDomainHint:'Leave empty to use node domain. With domain: Hy2+Reality. Without: Reality only.',
+    startSetup:'Start Setup',saveRestart:'Save & Restart',notInstalled:'not installed'},
   zh:{overview:'概览',users:'用户',nodes:'节点',stats:'统计',signOut:'退出',signIn:'登录',loginHint:'需要管理员令牌',token:'令牌',
-    totalTraffic:'总流量',user:'用户',traffic:'流量',expires:'到期',subscription:'订阅',actions:'操作',newUser:'新建用户',
+    totalTraffic:'总流量',user:'用户',traffic:'流量',expires:'到期',subscription:'订阅',actions:'操作',newUser:'新建用户',newNode:'新建节点',
     copyLink:'复制链接',access:'权限',reset:'重置',del:'删除',push:'推送',preview:'预览',pushAll:'推送全部',inbounds:'入站协议',
-    noInbounds:'暂无入站协议',trafficStats:'流量统计',used:'已用',limit:'限额',usage:'用量',
-    username:'用户名',cancel:'取消',create:'创建',nodeAccess:'节点权限',grantAll:'全部授权',done:'完成'}
+    noInbounds:'暂无协议 — 使用一键配置添加',trafficStats:'流量统计',used:'已用',limit:'限额',usage:'用量',
+    username:'用户名',cancel:'取消',create:'创建',nodeAccess:'节点权限',grantAll:'全部授权',done:'完成',
+    nodeName:'节点名称',domainOptional:'域名（可选，Hysteria2/HTTPUpgrade需要）',
+    setupSSH:'配置SSH',install:'安装',autoSetup:'一键配置',checkStatus:'检测状态',rawConfig:'原始配置',
+    rootPassword:'Root密码',sshHint:'注入面板SSH公钥到节点，实现免密连接',confirm:'确认',working:'执行中...',
+    domain:'域名',protocols:'协议',needsDomain:'需要域名',noDomain:'无需域名',forCDN:'CDN/被墙IP使用',
+    autoSetupDomainHint:'留空使用节点域名。有域名→Hy2+Reality，无域名→仅Reality',
+    startSetup:'开始配置',saveRestart:'保存并重启',notInstalled:'未安装'}
 };
 
 function app(){return{
@@ -308,8 +439,14 @@ function app(){return{
   toasts:[],
   showCreateUser:false,
   newUser:{name:'',traffic_limit_gb:100,expire_at:''},
+  showCreateNode:false,
+  newNode:{name:'',host:'',domain:'',port:22,ssh_user:'root'},
   showAccess:false,accessUser:null,accessNodeIds:[],
-  expandedNode:null,nodeDetail:null,
+  expandedNode:null,nodeDetail:null,nodeStatuses:{},
+  showSSHSetup:false,sshNode:null,sshPassword:'',
+  showAutoSetup:false,autoSetupNode:null,autoSetupDomain:'',autoSetupProtos:[],
+  showRawCfg:false,rawCfgNode:null,rawCfgContent:'',
+  opLoading:false,
 
   T(k){return I18N[this.lang]?.[k]||I18N.en[k]||k},
   toggleLang(){this.lang=this.lang==='zh'?'en':'zh';localStorage.setItem('panel_lang',this.lang)},
@@ -378,10 +515,75 @@ function app(){return{
     this.accessNodeIds=this.nodes.map(n=>n.id);this.toast(this.lang==='zh'?'已授权全部节点':'All nodes granted');
   },
 
+  async createNode(){
+    if(!this.newNode.name||!this.newNode.host){this.toast('Name and host required','error');return}
+    const body={name:this.newNode.name,host:this.newNode.host,domain:this.newNode.domain||'',port:this.newNode.port||22,ssh_user:this.newNode.ssh_user||'root',proxy_type:'singbox'};
+    await this.api('/api/nodes',{method:'POST',body:JSON.stringify(body)});
+    this.showCreateNode=false;this.newNode={name:'',host:'',domain:'',port:22,ssh_user:'root'};
+    this.toast(this.lang==='zh'?'节点已创建':'Node created');this.loadTab();
+  },
+  async deleteNode(n){
+    if(!confirm((this.lang==='zh'?'删除节点 ':'Delete node ')+n.name+'?'))return;
+    await this.api('/api/nodes/'+n.id,{method:'DELETE'});
+    this.toast(this.lang==='zh'?'已删除':'Deleted');this.loadTab();
+  },
+  async deleteInbound(ib){
+    if(!confirm((this.lang==='zh'?'删除协议 ':'Delete inbound ')+ib.protocol+'?'))return;
+    await this.api('/api/inbounds/'+ib.id,{method:'DELETE'});
+    this.toast(this.lang==='zh'?'已删除':'Deleted');
+    if(this.nodeDetail)this.nodeDetail=await this.api('/api/nodes/'+this.nodeDetail.id);
+  },
+
   async toggleNodeDetail(n){
     if(this.expandedNode===n.id){this.expandedNode=null;return}
     this.expandedNode=n.id;this.nodeDetail=null;
     this.nodeDetail=await this.api('/api/nodes/'+n.id);
+  },
+  async checkNodeStatus(n){
+    try{
+      const s=await this.api('/api/nodes/'+n.id+'/status');
+      this.nodeStatuses[n.id]=s;
+      this.toast(n.name+': '+(s.running?'running':'stopped')+' '+(s.version||''));
+    }catch(e){this.toast(e.message,'error')}
+  },
+  showSetupSSHModal(n){this.sshNode=n;this.sshPassword='';this.showSSHSetup=true},
+  async doSetupSSH(){
+    if(!this.sshPassword){this.toast('Password required','error');return}
+    this.opLoading=true;
+    try{
+      const r=await this.api('/api/nodes/'+this.sshNode.id+'/setup-ssh',{method:'POST',body:JSON.stringify({password:this.sshPassword})});
+      this.toast(r.status==='ready'?(this.lang==='zh'?'SSH配置成功':'SSH configured'):(r.status||'done'));
+      this.showSSHSetup=false;
+    }catch(e){this.toast(e.message,'error')}
+    this.opLoading=false;
+  },
+  async installSingbox(n){
+    if(!confirm((this.lang==='zh'?'安装/升级 sing-box 到 ':'Install/upgrade sing-box on ')+n.name+'?'))return;
+    this.opLoading=true;
+    try{
+      const r=await this.api('/api/nodes/'+n.id+'/install',{method:'POST',body:JSON.stringify({version:'latest'})});
+      this.toast(n.name+': '+r.version+' installed');
+      this.nodeStatuses[n.id]={reachable:true,installed:true,version:r.version,running:true};
+    }catch(e){this.toast(e.message,'error')}
+    this.opLoading=false;
+  },
+  showAutoSetupModal(n){
+    this.autoSetupNode=n;this.autoSetupDomain=n.domain||'';
+    this.autoSetupProtos=n.domain?['hysteria2','vless-reality']:['vless-reality'];
+    this.showAutoSetup=true;
+  },
+  async doAutoSetup(){
+    this.opLoading=true;
+    try{
+      const body={domain:this.autoSetupDomain};
+      if(this.autoSetupProtos.length)body.protocols=this.autoSetupProtos;
+      const r=await this.api('/api/nodes/'+this.autoSetupNode.id+'/auto-setup',{method:'POST',body:JSON.stringify(body)});
+      const ok=(r.inbounds||[]).filter(x=>x.status==='ok').length;
+      this.toast((this.lang==='zh'?'配置完成，':'Setup done, ')+ok+(this.lang==='zh'?' 个协议':' protocols'));
+      this.showAutoSetup=false;this.loadTab();
+      if(this.expandedNode===this.autoSetupNode.id)this.nodeDetail=await this.api('/api/nodes/'+this.autoSetupNode.id);
+    }catch(e){this.toast(e.message,'error')}
+    this.opLoading=false;
   },
   async pushNode(n){
     if(!confirm((this.lang==='zh'?'推送配置到 ':'Push config to ')+n.name+'?'))return;
@@ -390,7 +592,24 @@ function app(){return{
   },
   async generateNode(n){
     const cfg=await this.api('/api/nodes/'+n.id+'/generate',{method:'POST'});
-    const w=window.open('','_blank');if(w)w.document.write('<pre style="background:#f9fafb;color:#111;padding:20px;font-size:12px;font-family:monospace">'+JSON.stringify(cfg,null,2)+'</pre>');
+    const w=window.open('','_blank');if(w)w.document.write('<pre style="background:#f9fafb;color:#111;padding:20px;font-size:12px;font-family:monospace;white-space:pre-wrap">'+JSON.stringify(cfg,null,2)+'</pre>');
+  },
+  async showRawConfig(n){
+    this.rawCfgNode=n;this.rawCfgContent='';this.showRawCfg=true;
+    try{
+      const r=await this.api('/api/nodes/'+n.id+'/raw-config');
+      this.rawCfgContent=typeof r==='string'?r:JSON.stringify(r,null,2);
+    }catch(e){this.rawCfgContent='// '+e.message}
+  },
+  async saveRawConfig(){
+    this.opLoading=true;
+    try{
+      let body=this.rawCfgContent;
+      try{body=JSON.stringify(JSON.parse(this.rawCfgContent))}catch(_){}
+      await this.api('/api/nodes/'+this.rawCfgNode.id+'/raw-config?restart=true',{method:'PUT',body});
+      this.toast(this.lang==='zh'?'已保存并重启':'Saved & restarted');this.showRawCfg=false;
+    }catch(e){this.toast(e.message,'error')}
+    this.opLoading=false;
   },
   async pushAll(){
     if(!confirm(this.lang==='zh'?'推送到所有节点？':'Push config to ALL nodes?'))return;
