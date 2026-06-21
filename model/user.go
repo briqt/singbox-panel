@@ -97,7 +97,7 @@ func (s *UserStore) Create(req CreateUserReq) (*User, error) {
 	}
 	subToken := generateToken()
 	now := time.Now().UTC().Format(time.DateTime)
-	res, err := s.DB.Exec(`INSERT INTO users (name, uuid, sub_token, traffic_limit_bytes, expire_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	res, err := s.DB.Exec(`INSERT INTO users (name, uuid, sub_token, traffic_limit_bytes, traffic_reset_day, expire_at, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?)`,
 		req.Name, req.UUID, subToken, req.TrafficLimitBytes, req.ExpireAt, now, now)
 	if err != nil {
 		return nil, err
@@ -110,7 +110,7 @@ func (s *UserStore) CreateWithPassword(username, passwordHash string) (*User, er
 	uid := uuid.NewString()
 	subToken := generateToken()
 	now := time.Now().UTC().Format(time.DateTime)
-	res, err := s.DB.Exec(`INSERT INTO users (name, uuid, sub_token, password, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)`,
+	res, err := s.DB.Exec(`INSERT INTO users (name, uuid, sub_token, password, traffic_reset_day, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 0, ?, ?)`,
 		username, uid, subToken, passwordHash, now, now)
 	if err != nil {
 		return nil, err
