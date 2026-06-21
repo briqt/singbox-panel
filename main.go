@@ -63,6 +63,7 @@ func main() {
 	}))
 
 	// Node CRUD + config ops (admin)
+	validateHandler := &handler.ValidateHandler{Config: configHandler}
 	mux.HandleFunc("/api/nodes", adminAuth(cfg.AdminToken, nodeHandler.ServeHTTP))
 	mux.HandleFunc("/api/nodes/", adminAuth(cfg.AdminToken, func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
@@ -73,11 +74,16 @@ func main() {
 			strings.HasSuffix(path, "/upgrade") || strings.HasSuffix(path, "/status") ||
 			strings.HasSuffix(path, "/setup-ssh") {
 			nodeOpsHandler.ServeHTTP(w, r)
+		} else if strings.HasSuffix(path, "/cert") {
+			validateHandler.HandleCertInstall(w, r)
 		} else {
 			nodeHandler.ServeHTTP(w, r)
 		}
 	}))
 	mux.HandleFunc("/api/inbounds/", adminAuth(cfg.AdminToken, nodeHandler.ServeHTTP))
+
+	// DNS validation (admin)
+	mux.HandleFunc("/api/validate/dns", adminAuth(cfg.AdminToken, validateHandler.HandleDNSCheck))
 
 	// Batch operations (admin)
 	mux.HandleFunc("/api/batch/push-all", adminAuth(cfg.AdminToken, batchHandler.PushAll))
