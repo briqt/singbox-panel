@@ -32,7 +32,7 @@ func main() {
 	nodeHandler := &handler.NodeHandler{Store: nodeStore}
 	subHandler := &handler.SubscriptionHandler{Users: userStore, Nodes: nodeStore, Access: accessStore}
 	configHandler := &handler.ConfigHandler{Users: userStore, Nodes: nodeStore, Access: accessStore, SSHKeyPath: cfg.SSHKeyPath}
-	batchHandler := &handler.BatchHandler{Users: userStore, Nodes: nodeStore, Config: configHandler}
+	batchHandler := &handler.BatchHandler{Nodes: nodeStore, Config: configHandler}
 	authHandler := &handler.AuthHandler{Users: userStore, AdminToken: cfg.AdminToken}
 	accessHandler := &handler.AccessHandler{Access: accessStore, Nodes: nodeStore}
 	nodeOpsHandler := &handler.NodeOpsHandler{Nodes: nodeStore, Config: configHandler}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/briqt/singbox-panel/model"
 	"github.com/briqt/singbox-panel/singbox"
@@ -62,7 +63,9 @@ func (h *SubscriptionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	total := user.TrafficLimitBytes
 	userinfo := fmt.Sprintf("upload=%d; download=%d; total=%d", upload, download, total)
 	if user.ExpireAt != "" {
-		userinfo += fmt.Sprintf("; expire=%s", user.ExpireAt)
+		if t, err := time.Parse("2006-01-02 15:04:05", user.ExpireAt); err == nil {
+			userinfo += fmt.Sprintf("; expire=%d", t.Unix())
+		}
 	}
 	w.Header().Set("Subscription-Userinfo", userinfo)
 	w.Header().Set("Profile-Update-Interval", "6")
