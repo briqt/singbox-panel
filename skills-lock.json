@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "singbox-panel": {
+      "source": "briqt/singbox-panel",
+      "sourceType": "github",
+      "skillPath": "skill/SKILL.md",
+      "computedHash": "2650ac674d278b519151699faf488ea6a8d66b72b275e232003ed24e15d35d46"
+    }
+  }
+}
