@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,6 +12,36 @@ import (
 
 type UserHandler struct {
 	Store *model.UserStore
+	Nodes *model.NodeStore
+	Batch *BatchHandler
+}
+
+func (h *UserHandler) syncNodesAsync() {
+	if h.Batch == nil || h.Nodes == nil {
+		return
+	}
+	go func() {
+		nodes, err := h.Nodes.ListEnabled()
+		if err != nil {
+			log.Printf("auto-sync: list nodes: %v", err)
+			return
+		}
+		for _, node := range nodes {
+			if node.ProxyType != "singbox" {
+				continue
+			}
+			configBytes, err := h.Batch.Config.generateConfig(node.ID)
+			if err != nil {
+				log.Printf("auto-sync %s: generate: %v", node.Name, err)
+				continue
+			}
+			if err := h.Batch.Config.pushViaSSH(&node, configBytes); err != nil {
+				log.Printf("auto-sync %s: push: %v", node.Name, err)
+				continue
+			}
+			log.Printf("auto-sync %s: ok", node.Name)
+		}
+	}()
 }
 
 func (h *UserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -58,6 +89,7 @@ func (h *UserHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.syncNodesAsync()
 	writeJSON(w, http.StatusCreated, user)
 }
 
@@ -91,6 +123,9 @@ func (h *UserHandler) update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
+	if req.Enabled != nil {
+		h.syncNodesAsync()
+	}
 	writeJSON(w, http.StatusOK, user)
 }
 
@@ -104,6 +139,7 @@ func (h *UserHandler) delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.syncNodesAsync()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 

@@ -65,7 +65,10 @@ func (h *NodeOpsHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "node not found")
 		return
 	}
+
+	start := time.Now()
 	client, err := h.Config.sshConnect(node)
+	pingMs := time.Since(start).Milliseconds()
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"node": node.Name, "reachable": false, "error": err.Error()})
 		return
@@ -80,13 +83,31 @@ func (h *NodeOpsHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 	svcOut, _ := sshRun(client, "systemctl is-active sing-box 2>/dev/null")
 	running := strings.TrimSpace(svcOut) == "active"
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	// System info: memory + disk
+	sysOut, _ := sshRun(client, `printf '{"mem_total":%s,"mem_available":%s,"disk_total":%s,"disk_used":%s,"uptime":%s}' \
+		$(awk '/MemTotal/{t=$2} /MemAvailable/{a=$2} END{printf "%d %d",t*1024,a*1024}' /proc/meminfo) \
+		$(df / --output=size,used -B1 | tail -1 | awk '{printf "%s %s",$1,$2}') \
+		$(awk '{printf "%d",$1}' /proc/uptime)`)
+
+	var sysInfo map[string]int64
+	json.Unmarshal([]byte(sysOut), &sysInfo)
+
+	result := map[string]any{
 		"node":      node.Name,
 		"reachable": true,
 		"installed": installed,
 		"version":   strings.TrimSpace(verOut),
 		"running":   running,
-	})
+		"ssh_ms":    pingMs,
+	}
+	if sysInfo != nil {
+		result["mem_total"] = sysInfo["mem_total"]
+		result["mem_available"] = sysInfo["mem_available"]
+		result["disk_total"] = sysInfo["disk_total"]
+		result["disk_used"] = sysInfo["disk_used"]
+		result["uptime"] = sysInfo["uptime"]
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 type InstallReq struct {

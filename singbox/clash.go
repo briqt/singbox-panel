@@ -16,14 +16,16 @@ func GenerateClashConfig(user model.User, nodes []model.NodeWithInbounds) string
 		if !n.Enabled {
 			continue
 		}
+		names := protocolNameTracker{}
 		for _, ib := range n.Inbounds {
 			if !ib.Enabled {
 				continue
 			}
-			entry := buildClashProxy(user, n.Node, ib)
+			name := clashName(n.Node, ib, names)
+			entry := buildClashProxy(user, n.Node, ib, name)
 			if entry != "" {
 				proxies = append(proxies, entry)
-				proxyNames = append(proxyNames, clashName(n.Node, ib))
+				proxyNames = append(proxyNames, name)
 			}
 		}
 	}
@@ -50,19 +52,19 @@ func GenerateClashConfig(user model.User, nodes []model.NodeWithInbounds) string
 	return sb.String()
 }
 
-func clashName(node model.Node, ib model.NodeInbound) string {
+func clashName(node model.Node, ib model.NodeInbound, names protocolNameTracker) string {
 	switch ib.Protocol {
 	case "hysteria2":
-		return node.Name + "-Hy2"
+		return names.next(node.Name + "-Hy2")
 	case "vless-reality":
-		return node.Name + "-Reality"
+		return names.next(node.Name + "-Reality")
 	case "vless-httpupgrade":
-		return node.Name + "-CDN"
+		return names.next(node.Name + "-CDN")
 	}
-	return node.Name
+	return names.next(node.Name)
 }
 
-func buildClashProxy(user model.User, node model.Node, ib model.NodeInbound) string {
+func buildClashProxy(user model.User, node model.Node, ib model.NodeInbound, name string) string {
 	var s map[string]any
 	json.Unmarshal(ib.Settings, &s)
 	if s == nil {
@@ -70,16 +72,16 @@ func buildClashProxy(user model.User, node model.Node, ib model.NodeInbound) str
 	}
 	switch ib.Protocol {
 	case "hysteria2":
-		return clashHysteria2(user, node, ib, s)
+		return clashHysteria2(user, node, ib, s, name)
 	case "vless-reality":
-		return clashReality(user, node, ib, s)
+		return clashReality(user, node, ib, s, name)
 	case "vless-httpupgrade":
-		return clashHTTPUpgrade(user, node, ib, s)
+		return clashHTTPUpgrade(user, node, ib, s, name)
 	}
 	return ""
 }
 
-func clashHysteria2(user model.User, node model.Node, ib model.NodeInbound, s map[string]any) string {
+func clashHysteria2(user model.User, node model.Node, ib model.NodeInbound, s map[string]any, name string) string {
 	domain, _ := s["domain"].(string)
 	if domain == "" {
 		domain = node.Domain
@@ -87,17 +89,17 @@ func clashHysteria2(user model.User, node model.Node, ib model.NodeInbound, s ma
 	if domain == "" {
 		return ""
 	}
-	return fmt.Sprintf(`  - name: "%s-Hy2"
+	return fmt.Sprintf(`  - name: "%s"
     type: hysteria2
     server: %s
     port: %d
     password: %s
     sni: %s
     alpn:
-      - h3`, node.Name, node.Host, ib.Port, user.UUID, domain)
+      - h3`, name, node.Host, ib.Port, user.UUID, domain)
 }
 
-func clashReality(user model.User, node model.Node, ib model.NodeInbound, s map[string]any) string {
+func clashReality(user model.User, node model.Node, ib model.NodeInbound, s map[string]any, name string) string {
 	sni, _ := s["sni"].(string)
 	publicKey, _ := s["public_key"].(string)
 	shortID, _ := s["short_id"].(string)
@@ -108,7 +110,7 @@ func clashReality(user model.User, node model.Node, ib model.NodeInbound, s map[
 	if sni == "" || publicKey == "" {
 		return ""
 	}
-	return fmt.Sprintf(`  - name: "%s-Reality"
+	return fmt.Sprintf(`  - name: "%s"
     type: vless
     server: %s
     port: %d
@@ -121,10 +123,10 @@ func clashReality(user model.User, node model.Node, ib model.NodeInbound, s map[
     reality-opts:
       public-key: %s
       short-id: %s
-    network: tcp`, node.Name, node.Host, ib.Port, user.UUID, sni, fp, publicKey, shortID)
+    network: tcp`, name, node.Host, ib.Port, user.UUID, sni, fp, publicKey, shortID)
 }
 
-func clashHTTPUpgrade(user model.User, node model.Node, ib model.NodeInbound, s map[string]any) string {
+func clashHTTPUpgrade(user model.User, node model.Node, ib model.NodeInbound, s map[string]any, name string) string {
 	domain, _ := s["domain"].(string)
 	if domain == "" {
 		domain = node.Domain
@@ -136,10 +138,10 @@ func clashHTTPUpgrade(user model.User, node model.Node, ib model.NodeInbound, s 
 	if path == "" {
 		path = "/upgrade"
 	}
-	return fmt.Sprintf(`  - name: "%s-CDN"
+	return fmt.Sprintf(`  - name: "%s"
     type: vless
     server: %s
-    port: %d
+    port: 443
     udp: true
     uuid: %s
     tls: true
@@ -148,5 +150,5 @@ func clashHTTPUpgrade(user model.User, node model.Node, ib model.NodeInbound, s 
     network: httpupgrade
     httpupgrade-opts:
       path: %s
-      host: %s`, node.Name, domain, ib.Port, user.UUID, domain, path, domain)
+      host: %s`, name, domain, user.UUID, domain, path, domain)
 }
