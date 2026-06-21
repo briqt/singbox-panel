@@ -25,8 +25,11 @@ func Open(dataDir string) (*sql.DB, error) {
 }
 
 func migrate(db *sql.DB) error {
-	_, err := db.Exec(schema)
-	return err
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	db.Exec(`ALTER TABLE nodes ADD COLUMN domain TEXT NOT NULL DEFAULT ''`)
+	return nil
 }
 
 const schema = `
@@ -48,6 +51,7 @@ CREATE TABLE IF NOT EXISTS nodes (
 	name TEXT NOT NULL UNIQUE,
 	host TEXT NOT NULL,
 	port INTEGER NOT NULL DEFAULT 22,
+	domain TEXT NOT NULL DEFAULT '',
 	ssh_user TEXT NOT NULL DEFAULT 'root',
 	proxy_type TEXT NOT NULL DEFAULT 'singbox',
 	config_path TEXT NOT NULL DEFAULT '/etc/v2ray-agent/sing-box/conf/config.json',

@@ -10,6 +10,7 @@ type Node struct {
 	Name       string `json:"name"`
 	Host       string `json:"host"`
 	Port       int    `json:"port"`
+	Domain     string `json:"domain"`
 	SSHUser    string `json:"ssh_user"`
 	ProxyType  string `json:"proxy_type"`
 	ConfigPath string `json:"config_path"`
@@ -39,7 +40,7 @@ type NodeStore struct {
 }
 
 func (s *NodeStore) List() ([]Node, error) {
-	rows, err := s.DB.Query(`SELECT id, name, host, port, ssh_user, proxy_type, config_path, singbox_bin, agent_token, enabled, created_at FROM nodes ORDER BY id`)
+	rows, err := s.DB.Query(`SELECT id, name, host, port, domain, ssh_user, proxy_type, config_path, singbox_bin, agent_token, enabled, created_at FROM nodes ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +49,7 @@ func (s *NodeStore) List() ([]Node, error) {
 	for rows.Next() {
 		var n Node
 		var enabled int
-		if err := rows.Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.SSHUser, &n.ProxyType, &n.ConfigPath, &n.SingboxBin, &n.AgentToken, &enabled, &n.CreatedAt); err != nil {
+		if err := rows.Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Domain, &n.SSHUser, &n.ProxyType, &n.ConfigPath, &n.SingboxBin, &n.AgentToken, &enabled, &n.CreatedAt); err != nil {
 			return nil, err
 		}
 		n.Enabled = enabled == 1
@@ -60,8 +61,8 @@ func (s *NodeStore) List() ([]Node, error) {
 func (s *NodeStore) Get(id int) (*Node, error) {
 	var n Node
 	var enabled int
-	err := s.DB.QueryRow(`SELECT id, name, host, port, ssh_user, proxy_type, config_path, singbox_bin, agent_token, enabled, created_at FROM nodes WHERE id = ?`, id).
-		Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.SSHUser, &n.ProxyType, &n.ConfigPath, &n.SingboxBin, &n.AgentToken, &enabled, &n.CreatedAt)
+	err := s.DB.QueryRow(`SELECT id, name, host, port, domain, ssh_user, proxy_type, config_path, singbox_bin, agent_token, enabled, created_at FROM nodes WHERE id = ?`, id).
+		Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Domain, &n.SSHUser, &n.ProxyType, &n.ConfigPath, &n.SingboxBin, &n.AgentToken, &enabled, &n.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -85,6 +86,7 @@ type CreateNodeReq struct {
 	Name       string `json:"name"`
 	Host       string `json:"host"`
 	Port       int    `json:"port"`
+	Domain     string `json:"domain"`
 	SSHUser    string `json:"ssh_user"`
 	ProxyType  string `json:"proxy_type"`
 	ConfigPath string `json:"config_path"`
@@ -108,8 +110,8 @@ func (s *NodeStore) Create(req CreateNodeReq) (*Node, error) {
 		req.SingboxBin = "/etc/v2ray-agent/sing-box/sing-box"
 	}
 	token := generateToken()
-	res, err := s.DB.Exec(`INSERT INTO nodes (name, host, port, ssh_user, proxy_type, config_path, singbox_bin, agent_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		req.Name, req.Host, req.Port, req.SSHUser, req.ProxyType, req.ConfigPath, req.SingboxBin, token)
+	res, err := s.DB.Exec(`INSERT INTO nodes (name, host, port, domain, ssh_user, proxy_type, config_path, singbox_bin, agent_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		req.Name, req.Host, req.Port, req.Domain, req.SSHUser, req.ProxyType, req.ConfigPath, req.SingboxBin, token)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +123,7 @@ type UpdateNodeReq struct {
 	Name       *string `json:"name"`
 	Host       *string `json:"host"`
 	Port       *int    `json:"port"`
+	Domain     *string `json:"domain"`
 	Enabled    *bool   `json:"enabled"`
 	ConfigPath *string `json:"config_path"`
 	SingboxBin *string `json:"singbox_bin"`
@@ -135,6 +138,9 @@ func (s *NodeStore) Update(id int, req UpdateNodeReq) (*Node, error) {
 	}
 	if req.Port != nil {
 		s.DB.Exec(`UPDATE nodes SET port = ? WHERE id = ?`, *req.Port, id)
+	}
+	if req.Domain != nil {
+		s.DB.Exec(`UPDATE nodes SET domain = ? WHERE id = ?`, *req.Domain, id)
 	}
 	if req.Enabled != nil {
 		enabled := 0
@@ -212,4 +218,49 @@ func (s *NodeStore) CreateInbound(nodeID int, req CreateInboundReq) (*NodeInboun
 func (s *NodeStore) DeleteInbound(id int) error {
 	_, err := s.DB.Exec(`DELETE FROM node_inbounds WHERE id = ?`, id)
 	return err
+}
+
+func (s *NodeStore) GetByToken(token string) (*Node, error) {
+	if token == "" {
+		return nil, sql.ErrNoRows
+	}
+	var n Node
+	var enabled int
+	err := s.DB.QueryRow(`SELECT id, name, host, port, domain, ssh_user, proxy_type, config_path, singbox_bin, agent_token, enabled, created_at FROM nodes WHERE agent_token = ?`, token).
+		Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Domain, &n.SSHUser, &n.ProxyType, &n.ConfigPath, &n.SingboxBin, &n.AgentToken, &enabled, &n.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	n.Enabled = enabled == 1
+	return &n, nil
+}
+
+func (s *NodeStore) RecordTraffic(nodeID, userID int, up, down int64) {
+	s.DB.Exec(`INSERT INTO traffic_logs (node_id, user_id, bytes_up, bytes_down) VALUES (?, ?, ?, ?)`,
+		nodeID, userID, up, down)
+}
+
+func (s *NodeStore) GetTrafficSum(nodeID int) (up, down int64) {
+	s.DB.QueryRow(`SELECT COALESCE(SUM(bytes_up),0), COALESCE(SUM(bytes_down),0) FROM traffic_logs WHERE node_id = ?`, nodeID).
+		Scan(&up, &down)
+	return
+}
+
+func (s *NodeStore) ListEnabled() ([]Node, error) {
+	rows, err := s.DB.Query(`SELECT id, name, host, port, domain, ssh_user, proxy_type, config_path, singbox_bin, agent_token, enabled, created_at FROM nodes WHERE enabled = 1 ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var nodes []Node
+	for rows.Next() {
+		var n Node
+		var enabled int
+		if err := rows.Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Domain, &n.SSHUser, &n.ProxyType, &n.ConfigPath, &n.SingboxBin, &n.AgentToken, &enabled, &n.CreatedAt); err != nil {
+			return nil, err
+		}
+		n.Enabled = enabled == 1
+		nodes = append(nodes, n)
+	}
+	return nodes, nil
 }
