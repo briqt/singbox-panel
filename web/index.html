@@ -10,104 +10,103 @@
 [x-cloak]{display:none!important}
 ::-webkit-scrollbar{width:6px;height:6px}
 ::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:#374151;border-radius:3px}
+::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:3px}
 </style>
 </head>
-<body class="bg-gray-950 text-gray-300 min-h-screen antialiased">
+<body class="bg-gray-50 text-gray-700 min-h-screen antialiased">
 <div x-data="app()" x-cloak>
 
 <!-- Toasts -->
 <div class="fixed bottom-4 right-4 z-[100] space-y-2">
   <template x-for="t in toasts" :key="t.id">
-    <div :class="t.type==='error'?'border-red-500/50 bg-red-950/80':'border-emerald-500/50 bg-emerald-950/80'"
-         class="px-4 py-2.5 rounded-lg text-sm border backdrop-blur flex items-center gap-2 shadow-xl"
+    <div :class="t.type==='error'?'border-red-200 bg-red-50 text-red-700':'border-emerald-200 bg-emerald-50 text-emerald-700'"
+         class="px-4 py-2.5 rounded-lg text-sm border flex items-center gap-2 shadow-lg"
          x-init="setTimeout(()=>toasts=toasts.filter(x=>x.id!==t.id),3000)">
-      <span :class="t.type==='error'?'text-red-400':'text-emerald-400'" x-text="t.type==='error'?'✕':'✓'" class="text-xs font-bold"></span>
-      <span x-text="t.msg" class="text-gray-200"></span>
+      <span x-text="t.type==='error'?'✕':'✓'" class="text-xs font-bold"></span>
+      <span x-text="t.msg"></span>
     </div>
   </template>
 </div>
 
 <!-- Login -->
 <template x-if="!authed">
-<div class="flex items-center justify-center min-h-screen">
-  <div class="bg-gray-900 border border-gray-800 p-8 rounded-2xl w-full max-w-xs shadow-2xl">
+<div class="flex items-center justify-center min-h-screen bg-gray-100">
+  <div class="bg-white border border-gray-200 p-8 rounded-2xl w-full max-w-xs shadow-sm">
     <div class="text-center mb-6">
       <div class="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center mx-auto mb-3 text-lg font-bold text-white">S</div>
-      <h1 class="text-lg font-semibold text-white">SingBox Panel</h1>
-      <p class="text-xs text-gray-500 mt-1">Admin access required</p>
+      <h1 class="text-lg font-semibold text-gray-900">SingBox Panel</h1>
+      <p class="text-xs text-gray-400 mt-1" x-text="T('loginHint')"></p>
     </div>
-    <input x-model="tokenInput" type="password" placeholder="Token"
-           class="w-full px-3 py-2.5 rounded-lg bg-gray-800 border border-gray-700 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-600"
+    <input x-model="tokenInput" type="password" :placeholder="T('token')"
+           class="w-full px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition placeholder-gray-400"
            @keydown.enter="login()">
-    <button @click="login()" class="w-full mt-3 bg-blue-600 hover:bg-blue-500 text-white py-2.5 rounded-lg text-sm font-medium transition">Sign In</button>
+    <button @click="login()" class="w-full mt-3 bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg text-sm font-medium transition" x-text="T('signIn')"></button>
   </div>
 </div>
 </template>
 
 <!-- App -->
 <template x-if="authed">
-<div class="flex min-h-screen">
-  <!-- Sidebar -->
-  <aside class="w-48 bg-gray-900/50 border-r border-gray-800/50 flex flex-col fixed h-full">
-    <div class="px-4 py-4 border-b border-gray-800/50">
-      <span class="font-semibold text-white text-sm tracking-tight">SingBox Panel</span>
+<div class="min-h-screen">
+  <!-- Top Bar -->
+  <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between sticky top-0 z-10">
+    <div class="flex items-center gap-6">
+      <span class="font-semibold text-gray-900 text-sm">SingBox Panel</span>
+      <nav class="flex items-center gap-1">
+        <template x-for="t in [{id:'dash',k:'overview'},{id:'users',k:'users'},{id:'nodes',k:'nodes'},{id:'stats',k:'stats'}]">
+          <button @click="tab=t.id;loadTab()" :class="tab===t.id?'bg-gray-100 text-gray-900':'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
+                  class="px-3 py-1.5 rounded-md text-sm transition" x-text="T(t.k)"></button>
+        </template>
+      </nav>
     </div>
-    <nav class="flex-1 p-2 space-y-0.5">
-      <template x-for="t in [{id:'dash',icon:'◐',label:'Overview'},{id:'users',icon:'●',label:'Users'},{id:'nodes',icon:'◆',label:'Nodes'},{id:'stats',icon:'◧',label:'Stats'}]">
-        <button @click="tab=t.id;loadTab()" :class="tab===t.id?'bg-gray-800 text-white':'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'"
-                class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition">
-          <span x-text="t.icon" class="text-[10px] opacity-60"></span><span x-text="t.label"></span>
-        </button>
-      </template>
-    </nav>
-    <div class="p-3 border-t border-gray-800/50">
-      <button @click="authed=false;localStorage.removeItem('admin_token')" class="text-xs text-gray-500 hover:text-gray-300 transition">Sign out</button>
+    <div class="flex items-center gap-3">
+      <button @click="toggleLang()" class="text-xs text-gray-400 hover:text-gray-600 transition" x-text="lang==='zh'?'EN':'中文'"></button>
+      <button @click="authed=false;localStorage.removeItem('admin_token')" class="text-xs text-gray-400 hover:text-gray-600 transition" x-text="T('signOut')"></button>
     </div>
-  </aside>
+  </header>
 
   <!-- Content -->
-  <main class="ml-48 flex-1 p-6 max-w-5xl">
+  <main class="max-w-4xl mx-auto px-6 py-6">
 
   <!-- Overview -->
   <div x-show="tab==='dash'">
-    <h2 class="text-lg font-semibold text-white mb-4">Overview</h2>
+    <h2 class="text-lg font-semibold text-gray-900 mb-4" x-text="T('overview')"></h2>
     <div class="grid grid-cols-3 gap-4 mb-6">
-      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
-        <div class="text-2xl font-bold text-white" x-text="users.length"></div>
-        <div class="text-xs text-gray-500 mt-1">Users</div>
+      <div class="bg-white border border-gray-200 rounded-xl p-4">
+        <div class="text-2xl font-bold text-gray-900" x-text="users.length"></div>
+        <div class="text-xs text-gray-400 mt-1" x-text="T('users')"></div>
       </div>
-      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
-        <div class="text-2xl font-bold text-white" x-text="nodes.length"></div>
-        <div class="text-xs text-gray-500 mt-1">Nodes</div>
+      <div class="bg-white border border-gray-200 rounded-xl p-4">
+        <div class="text-2xl font-bold text-gray-900" x-text="nodes.length"></div>
+        <div class="text-xs text-gray-400 mt-1" x-text="T('nodes')"></div>
       </div>
-      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
-        <div class="text-2xl font-bold text-white" x-text="fmtBytes(users.reduce((a,u)=>a+u.traffic_used_bytes,0))"></div>
-        <div class="text-xs text-gray-500 mt-1">Total Traffic</div>
+      <div class="bg-white border border-gray-200 rounded-xl p-4">
+        <div class="text-2xl font-bold text-gray-900" x-text="fmtBytes(users.reduce((a,u)=>a+u.traffic_used_bytes,0))"></div>
+        <div class="text-xs text-gray-400 mt-1" x-text="T('totalTraffic')"></div>
       </div>
     </div>
     <div class="grid grid-cols-2 gap-4">
-      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
-        <h3 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3">Users</h3>
+      <div class="bg-white border border-gray-200 rounded-xl p-4">
+        <h3 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3" x-text="T('users')"></h3>
         <template x-for="u in users" :key="u.id">
           <div class="flex items-center justify-between py-1.5 text-sm">
             <div class="flex items-center gap-2">
-              <span :class="u.enabled?'bg-emerald-500':'bg-gray-600'" class="w-1.5 h-1.5 rounded-full"></span>
-              <span x-text="u.name" class="text-gray-200"></span>
+              <span :class="u.enabled?'bg-emerald-500':'bg-gray-300'" class="w-1.5 h-1.5 rounded-full"></span>
+              <span x-text="u.name" class="text-gray-700"></span>
             </div>
-            <span class="text-xs text-gray-500" x-text="fmtBytes(u.traffic_used_bytes)"></span>
+            <span class="text-xs text-gray-400" x-text="fmtBytes(u.traffic_used_bytes)"></span>
           </div>
         </template>
       </div>
-      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
-        <h3 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3">Nodes</h3>
+      <div class="bg-white border border-gray-200 rounded-xl p-4">
+        <h3 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3" x-text="T('nodes')"></h3>
         <template x-for="n in nodes" :key="n.id">
           <div class="flex items-center justify-between py-1.5 text-sm">
             <div class="flex items-center gap-2">
-              <span :class="n.enabled?'bg-emerald-500':'bg-gray-600'" class="w-1.5 h-1.5 rounded-full"></span>
-              <span x-text="n.name" class="text-gray-200"></span>
+              <span :class="n.enabled?'bg-emerald-500':'bg-gray-300'" class="w-1.5 h-1.5 rounded-full"></span>
+              <span x-text="n.name" class="text-gray-700"></span>
             </div>
-            <span class="text-xs text-gray-500 font-mono" x-text="n.host"></span>
+            <span class="text-xs text-gray-400 font-mono" x-text="n.domain||n.host"></span>
           </div>
         </template>
       </div>
@@ -117,30 +116,30 @@
   <!-- Users Tab -->
   <div x-show="tab==='users'">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold text-white">Users</h2>
-      <button @click="showCreateUser=true" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded-lg transition">+ New User</button>
+      <h2 class="text-lg font-semibold text-gray-900" x-text="T('users')"></h2>
+      <button @click="showCreateUser=true" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition" x-text="'+ '+T('newUser')"></button>
     </div>
-    <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+    <div class="bg-white border border-gray-200 rounded-xl overflow-hidden">
       <table class="w-full text-sm">
-        <thead><tr class="border-b border-gray-800 text-xs text-gray-500 uppercase tracking-wider">
-          <th class="px-4 py-3 text-left">User</th>
-          <th class="px-4 py-3 text-left">Traffic</th>
-          <th class="px-4 py-3 text-left">Expires</th>
-          <th class="px-4 py-3 text-left">Sub</th>
-          <th class="px-4 py-3 text-right">Actions</th>
+        <thead><tr class="border-b border-gray-100 text-xs text-gray-400 uppercase tracking-wider">
+          <th class="px-4 py-3 text-left" x-text="T('user')"></th>
+          <th class="px-4 py-3 text-left" x-text="T('traffic')"></th>
+          <th class="px-4 py-3 text-left" x-text="T('expires')"></th>
+          <th class="px-4 py-3 text-left" x-text="T('subscription')"></th>
+          <th class="px-4 py-3 text-right" x-text="T('actions')"></th>
         </tr></thead>
         <tbody>
         <template x-for="u in users" :key="u.id">
-          <tr class="border-b border-gray-800/50 hover:bg-gray-800/30 transition">
+          <tr class="border-b border-gray-50 hover:bg-gray-50/50 transition">
             <td class="px-4 py-3">
               <div class="flex items-center gap-2">
-                <span :class="u.enabled?'bg-emerald-500':'bg-red-500'" class="w-2 h-2 rounded-full flex-shrink-0"></span>
-                <span x-text="u.name" class="text-gray-100 font-medium"></span>
+                <span :class="u.enabled?'bg-emerald-500':'bg-red-400'" class="w-2 h-2 rounded-full flex-shrink-0"></span>
+                <span x-text="u.name" class="text-gray-900 font-medium"></span>
               </div>
             </td>
             <td class="px-4 py-3">
               <div class="flex items-center gap-2">
-                <div class="w-20 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                <div class="w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden">
                   <div class="h-full rounded-full" :class="u.traffic_limit_bytes&&u.traffic_used_bytes/u.traffic_limit_bytes>0.8?'bg-red-500':'bg-blue-500'"
                        :style="'width:'+Math.min(100,u.traffic_limit_bytes?Math.round(u.traffic_used_bytes/u.traffic_limit_bytes*100):0)+'%'"></div>
                 </div>
@@ -149,14 +148,14 @@
             </td>
             <td class="px-4 py-3 text-xs text-gray-400" x-text="u.expire_at||'—'"></td>
             <td class="px-4 py-3">
-              <button @click="copySubLink(u)" class="text-xs text-blue-400 hover:text-blue-300 font-mono transition">copy link</button>
+              <button @click="copySubLink(u)" class="text-xs text-blue-600 hover:text-blue-700 transition" x-text="T('copyLink')"></button>
             </td>
             <td class="px-4 py-3">
               <div class="flex items-center justify-end gap-1">
-                <button @click="toggleUser(u)" :class="u.enabled?'text-emerald-400 hover:text-emerald-300':'text-gray-500 hover:text-gray-300'" class="px-2 py-1 text-xs rounded transition" x-text="u.enabled?'on':'off'"></button>
-                <button @click="showAccessModal(u)" class="px-2 py-1 text-xs text-gray-400 hover:text-white rounded transition">access</button>
-                <button @click="resetTraffic(u)" class="px-2 py-1 text-xs text-gray-400 hover:text-white rounded transition">reset</button>
-                <button @click="deleteUser(u)" class="px-2 py-1 text-xs text-red-400/60 hover:text-red-400 rounded transition">del</button>
+                <button @click="toggleUser(u)" :class="u.enabled?'text-emerald-600':'text-gray-400'" class="px-2 py-1 text-xs rounded hover:bg-gray-100 transition" x-text="u.enabled?'on':'off'"></button>
+                <button @click="showAccessModal(u)" class="px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 rounded transition" x-text="T('access')"></button>
+                <button @click="resetTraffic(u)" class="px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 rounded transition" x-text="T('reset')"></button>
+                <button @click="deleteUser(u)" class="px-2 py-1 text-xs text-red-400 hover:bg-red-50 rounded transition" x-text="T('del')"></button>
               </div>
             </td>
           </tr>
@@ -169,41 +168,38 @@
   <!-- Nodes Tab -->
   <div x-show="tab==='nodes'">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold text-white">Nodes</h2>
-      <button @click="pushAll()" class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 text-white text-xs rounded-lg transition">Push All</button>
+      <h2 class="text-lg font-semibold text-gray-900" x-text="T('nodes')"></h2>
+      <button @click="pushAll()" class="px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs rounded-lg transition" x-text="T('pushAll')"></button>
     </div>
     <div class="space-y-2">
       <template x-for="n in nodes" :key="n.id">
-        <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-          <div class="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-gray-800/30 transition" @click="toggleNodeDetail(n)">
+        <div class="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div class="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-gray-50 transition" @click="toggleNodeDetail(n)">
             <div class="flex items-center gap-3">
-              <span :class="n.enabled?'bg-emerald-500':'bg-gray-600'" class="w-2 h-2 rounded-full"></span>
-              <span x-text="n.name" class="text-gray-100 font-medium text-sm"></span>
-              <span x-text="n.domain||n.host" class="text-xs text-gray-500 font-mono"></span>
+              <span :class="n.enabled?'bg-emerald-500':'bg-gray-300'" class="w-2 h-2 rounded-full"></span>
+              <span x-text="n.name" class="text-gray-900 font-medium text-sm"></span>
+              <span x-text="n.domain||n.host" class="text-xs text-gray-400 font-mono"></span>
             </div>
             <div class="flex items-center gap-2">
-              <button @click.stop="pushNode(n)" class="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition">push</button>
-              <button @click.stop="generateNode(n)" class="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition">preview</button>
-              <span class="text-gray-600 text-xs" x-text="expandedNode===n.id?'▾':'▸'"></span>
+              <button @click.stop="pushNode(n)" class="px-2 py-1 text-xs border border-gray-200 hover:bg-gray-50 text-gray-600 rounded transition" x-text="T('push')"></button>
+              <button @click.stop="generateNode(n)" class="px-2 py-1 text-xs border border-gray-200 hover:bg-gray-50 text-gray-600 rounded transition" x-text="T('preview')"></button>
+              <span class="text-gray-300 text-xs" x-text="expandedNode===n.id?'▾':'▸'"></span>
             </div>
           </div>
-          <div x-show="expandedNode===n.id" class="border-t border-gray-800/50 px-4 py-3 bg-gray-950/50">
-            <div class="text-xs text-gray-500 mb-2">Inbounds</div>
+          <div x-show="expandedNode===n.id" class="border-t border-gray-100 px-4 py-3 bg-gray-50/50">
+            <div class="text-xs text-gray-400 mb-2" x-text="T('inbounds')"></div>
             <template x-if="nodeDetail&&nodeDetail.id===n.id">
               <div class="space-y-1">
                 <template x-for="ib in nodeDetail.inbounds||[]" :key="ib.id">
                   <div class="flex items-center gap-3 text-xs py-1">
-                    <span class="text-gray-400 font-mono w-28" x-text="ib.protocol"></span>
-                    <span class="text-gray-500">:</span>
-                    <span class="text-gray-300 font-mono" x-text="ib.port"></span>
-                    <span class="text-gray-600" x-text="ib.tag"></span>
+                    <span class="text-gray-500 font-mono w-28" x-text="ib.protocol"></span>
+                    <span class="text-gray-300">:</span>
+                    <span class="text-gray-700 font-mono" x-text="ib.port"></span>
+                    <span class="text-gray-400" x-text="ib.tag"></span>
                   </div>
                 </template>
-                <div x-show="!nodeDetail.inbounds||nodeDetail.inbounds.length===0" class="text-xs text-gray-600 italic">No inbounds configured</div>
+                <div x-show="!nodeDetail.inbounds||nodeDetail.inbounds.length===0" class="text-xs text-gray-400 italic" x-text="T('noInbounds')"></div>
               </div>
-            </template>
-            <template x-if="!nodeDetail||nodeDetail.id!==n.id">
-              <div class="text-xs text-gray-600">Loading...</div>
             </template>
           </div>
         </div>
@@ -213,23 +209,23 @@
 
   <!-- Stats Tab -->
   <div x-show="tab==='stats'">
-    <h2 class="text-lg font-semibold text-white mb-4">Traffic Stats</h2>
-    <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+    <h2 class="text-lg font-semibold text-gray-900 mb-4" x-text="T('trafficStats')"></h2>
+    <div class="bg-white border border-gray-200 rounded-xl overflow-hidden">
       <table class="w-full text-sm">
-        <thead><tr class="border-b border-gray-800 text-xs text-gray-500 uppercase tracking-wider">
-          <th class="px-4 py-3 text-left">User</th>
-          <th class="px-4 py-3 text-left">Used</th>
-          <th class="px-4 py-3 text-left">Limit</th>
-          <th class="px-4 py-3 text-left">Usage</th>
+        <thead><tr class="border-b border-gray-100 text-xs text-gray-400 uppercase tracking-wider">
+          <th class="px-4 py-3 text-left" x-text="T('user')"></th>
+          <th class="px-4 py-3 text-left" x-text="T('used')"></th>
+          <th class="px-4 py-3 text-left" x-text="T('limit')"></th>
+          <th class="px-4 py-3 text-left" x-text="T('usage')"></th>
         </tr></thead>
         <tbody>
         <template x-for="s in statsUsers" :key="s.id">
-          <tr class="border-b border-gray-800/50">
-            <td class="px-4 py-3 text-gray-200" x-text="s.name"></td>
-            <td class="px-4 py-3 text-xs font-mono text-gray-400" x-text="fmtBytes(s.used_bytes)"></td>
-            <td class="px-4 py-3 text-xs font-mono text-gray-400" x-text="s.limit_bytes?fmtBytes(s.limit_bytes):'∞'"></td>
+          <tr class="border-b border-gray-50">
+            <td class="px-4 py-3 text-gray-700" x-text="s.name"></td>
+            <td class="px-4 py-3 text-xs font-mono text-gray-500" x-text="fmtBytes(s.used_bytes)"></td>
+            <td class="px-4 py-3 text-xs font-mono text-gray-500" x-text="s.limit_bytes?fmtBytes(s.limit_bytes):'∞'"></td>
             <td class="px-4 py-3">
-              <div class="w-32 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+              <div class="w-32 h-1.5 bg-gray-100 rounded-full overflow-hidden">
                 <div class="h-full rounded-full" :class="s.limit_bytes&&s.used_bytes/s.limit_bytes>0.8?'bg-red-500':'bg-blue-500'"
                      :style="'width:'+Math.min(100,s.limit_bytes?Math.round(s.used_bytes/s.limit_bytes*100):0)+'%'"></div>
               </div>
@@ -242,42 +238,42 @@
   </div>
 
   <!-- Create User Modal -->
-  <div x-show="showCreateUser" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="showCreateUser=false">
-    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 w-full max-w-sm shadow-2xl">
-      <h3 class="text-sm font-semibold text-white mb-4">New User</h3>
+  <div x-show="showCreateUser" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" @click.self="showCreateUser=false">
+    <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-sm shadow-xl">
+      <h3 class="text-sm font-semibold text-gray-900 mb-4" x-text="T('newUser')"></h3>
       <div class="space-y-3">
-        <input x-model="newUser.name" placeholder="Username" class="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-600">
+        <input x-model="newUser.name" :placeholder="T('username')" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400">
         <div class="flex items-center gap-2">
-          <input x-model.number="newUser.traffic_limit_gb" type="number" placeholder="Limit" class="flex-1 px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-sm focus:outline-none focus:border-blue-500 transition">
-          <span class="text-xs text-gray-500">GB</span>
+          <input x-model.number="newUser.traffic_limit_gb" type="number" :placeholder="T('limit')" class="flex-1 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition">
+          <span class="text-xs text-gray-400">GB</span>
         </div>
-        <input x-model="newUser.expire_at" type="date" class="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-sm focus:outline-none focus:border-blue-500 transition text-gray-400">
+        <input x-model="newUser.expire_at" type="date" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition text-gray-500">
       </div>
       <div class="flex justify-end gap-2 mt-5">
-        <button @click="showCreateUser=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-white transition">Cancel</button>
-        <button @click="createUser()" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded-lg transition">Create</button>
+        <button @click="showCreateUser=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition" x-text="T('cancel')"></button>
+        <button @click="createUser()" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition" x-text="T('create')"></button>
       </div>
     </div>
   </div>
 
   <!-- Access Modal -->
-  <div x-show="showAccess" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="showAccess=false">
-    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 w-full max-w-sm shadow-2xl">
-      <h3 class="text-sm font-semibold text-white mb-1">Node Access</h3>
-      <p class="text-xs text-gray-500 mb-4" x-text="accessUser?accessUser.name:''"></p>
-      <div class="space-y-2 max-h-60 overflow-y-auto">
+  <div x-show="showAccess" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" @click.self="showAccess=false">
+    <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-sm shadow-xl">
+      <h3 class="text-sm font-semibold text-gray-900 mb-1" x-text="T('nodeAccess')"></h3>
+      <p class="text-xs text-gray-400 mb-4" x-text="accessUser?accessUser.name:''"></p>
+      <div class="space-y-1 max-h-60 overflow-y-auto">
         <template x-for="n in nodes" :key="n.id">
-          <label class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-800/50 cursor-pointer transition">
+          <label class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 cursor-pointer transition">
             <input type="checkbox" :checked="accessNodeIds.includes(n.id)" @change="toggleAccess(n.id,$event.target.checked)"
-                   class="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-0 focus:ring-offset-0">
-            <span class="text-sm text-gray-200" x-text="n.name"></span>
-            <span class="text-xs text-gray-500 ml-auto" x-text="n.domain||n.host"></span>
+                   class="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-0 focus:ring-offset-0">
+            <span class="text-sm text-gray-700" x-text="n.name"></span>
+            <span class="text-xs text-gray-400 ml-auto" x-text="n.domain||n.host"></span>
           </label>
         </template>
       </div>
       <div class="flex justify-between mt-5">
-        <button @click="grantAll()" class="px-3 py-1.5 text-xs text-blue-400 hover:text-blue-300 transition">Grant All</button>
-        <button @click="showAccess=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-white transition">Done</button>
+        <button @click="grantAll()" class="px-3 py-1.5 text-xs text-blue-600 hover:text-blue-700 transition" x-text="T('grantAll')"></button>
+        <button @click="showAccess=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition" x-text="T('done')"></button>
       </div>
     </div>
   </div>
@@ -290,9 +286,23 @@
 <script>
 function fmtBytes(b){if(!b||b===0)return'0 B';const u=['B','KB','MB','GB','TB'];const i=Math.floor(Math.log(b)/Math.log(1024));return(b/Math.pow(1024,i)).toFixed(i>0?2:0)+' '+u[i]}
 
+const I18N={
+  en:{overview:'Overview',users:'Users',nodes:'Nodes',stats:'Stats',signOut:'Sign out',signIn:'Sign In',loginHint:'Admin access required',token:'Token',
+    totalTraffic:'Total Traffic',user:'User',traffic:'Traffic',expires:'Expires',subscription:'Sub',actions:'Actions',newUser:'New User',
+    copyLink:'copy link',access:'access',reset:'reset',del:'del',push:'push',preview:'preview',pushAll:'Push All',inbounds:'Inbounds',
+    noInbounds:'No inbounds configured',trafficStats:'Traffic Stats',used:'Used',limit:'Limit',usage:'Usage',
+    username:'Username',cancel:'Cancel',create:'Create',nodeAccess:'Node Access',grantAll:'Grant All',done:'Done'},
+  zh:{overview:'概览',users:'用户',nodes:'节点',stats:'统计',signOut:'退出',signIn:'登录',loginHint:'需要管理员令牌',token:'令牌',
+    totalTraffic:'总流量',user:'用户',traffic:'流量',expires:'到期',subscription:'订阅',actions:'操作',newUser:'新建用户',
+    copyLink:'复制链接',access:'权限',reset:'重置',del:'删除',push:'推送',preview:'预览',pushAll:'推送全部',inbounds:'入站协议',
+    noInbounds:'暂无入站协议',trafficStats:'流量统计',used:'已用',limit:'限额',usage:'用量',
+    username:'用户名',cancel:'取消',create:'创建',nodeAccess:'节点权限',grantAll:'全部授权',done:'完成'}
+};
+
 function app(){return{
   authed:!!localStorage.getItem('admin_token'),
   tokenInput:'',
+  lang:localStorage.getItem('panel_lang')||(navigator.language.startsWith('zh')?'zh':'en'),
   tab:'dash',
   users:[],nodes:[],statsUsers:[],
   toasts:[],
@@ -301,11 +311,14 @@ function app(){return{
   showAccess:false,accessUser:null,accessNodeIds:[],
   expandedNode:null,nodeDetail:null,
 
+  T(k){return I18N[this.lang]?.[k]||I18N.en[k]||k},
+  toggleLang(){this.lang=this.lang==='zh'?'en':'zh';localStorage.setItem('panel_lang',this.lang)},
+
   async init(){if(this.authed)this.loadTab()},
   async login(){
     localStorage.setItem('admin_token',this.tokenInput);
     try{await this.api('/api/health');this.authed=true;this.loadTab()}
-    catch(e){localStorage.removeItem('admin_token');this.toast('Invalid token','error')}
+    catch(e){localStorage.removeItem('admin_token');this.toast(this.lang==='zh'?'令牌无效':'Invalid token','error')}
   },
   async loadTab(){
     try{
@@ -323,35 +336,33 @@ function app(){return{
     return d;
   },
 
-  // Users
   async createUser(){
-    if(!this.newUser.name){this.toast('Name required','error');return}
+    if(!this.newUser.name){this.toast(this.T('username')+' required','error');return}
     const body={name:this.newUser.name,traffic_limit_bytes:Math.round(this.newUser.traffic_limit_gb*1073741824)};
     if(this.newUser.expire_at)body.expire_at=this.newUser.expire_at+' 00:00:00';
     await this.api('/api/users',{method:'POST',body:JSON.stringify(body)});
     this.showCreateUser=false;this.newUser={name:'',traffic_limit_gb:100,expire_at:''};
-    this.toast('User created');this.loadTab();
+    this.toast(this.lang==='zh'?'用户已创建':'User created');this.loadTab();
   },
   async toggleUser(u){
     await this.api('/api/users/'+u.id,{method:'PUT',body:JSON.stringify({enabled:!u.enabled})});
-    this.toast(u.name+(u.enabled?' disabled':' enabled'));this.loadTab();
+    this.toast(u.name+(u.enabled?(this.lang==='zh'?' 已禁用':' disabled'):(this.lang==='zh'?' 已启用':' enabled')));this.loadTab();
   },
   async resetTraffic(u){
-    if(!confirm('Reset traffic for '+u.name+'?'))return;
+    if(!confirm((this.lang==='zh'?'重置流量：':'Reset traffic for ')+u.name+'?'))return;
     await this.api('/api/users/'+u.id+'/reset-traffic',{method:'POST'});
-    this.toast('Traffic reset');this.loadTab();
+    this.toast(this.lang==='zh'?'流量已重置':'Traffic reset');this.loadTab();
   },
   async deleteUser(u){
-    if(!confirm('Delete '+u.name+'? This cannot be undone.'))return;
+    if(!confirm((this.lang==='zh'?'删除用户 ':'Delete ')+u.name+'?'))return;
     await this.api('/api/users/'+u.id,{method:'DELETE'});
-    this.toast('Deleted');this.loadTab();
+    this.toast(this.lang==='zh'?'已删除':'Deleted');this.loadTab();
   },
   copySubLink(u){
     navigator.clipboard.writeText(location.origin+'/sub/'+u.sub_token);
-    this.toast('Subscription link copied');
+    this.toast(this.lang==='zh'?'订阅链接已复制':'Link copied');
   },
 
-  // Access
   async showAccessModal(u){
     this.accessUser=u;this.showAccess=true;
     const nodes=await this.api('/api/users/'+u.id+'/access');
@@ -364,28 +375,27 @@ function app(){return{
   },
   async grantAll(){
     await this.api('/api/users/'+this.accessUser.id+'/access',{method:'POST',body:JSON.stringify({all:true})});
-    this.accessNodeIds=this.nodes.map(n=>n.id);this.toast('All nodes granted');
+    this.accessNodeIds=this.nodes.map(n=>n.id);this.toast(this.lang==='zh'?'已授权全部节点':'All nodes granted');
   },
 
-  // Nodes
   async toggleNodeDetail(n){
     if(this.expandedNode===n.id){this.expandedNode=null;return}
     this.expandedNode=n.id;this.nodeDetail=null;
     this.nodeDetail=await this.api('/api/nodes/'+n.id);
   },
   async pushNode(n){
-    if(!confirm('Push config to '+n.name+'? This restarts sing-box.'))return;
-    try{await this.api('/api/nodes/'+n.id+'/push',{method:'POST'});this.toast('Pushed to '+n.name)}
-    catch(e){this.toast('Push failed: '+e.message,'error')}
+    if(!confirm((this.lang==='zh'?'推送配置到 ':'Push config to ')+n.name+'?'))return;
+    try{await this.api('/api/nodes/'+n.id+'/push',{method:'POST'});this.toast((this.lang==='zh'?'已推送到 ':'Pushed to ')+n.name)}
+    catch(e){this.toast(e.message,'error')}
   },
   async generateNode(n){
     const cfg=await this.api('/api/nodes/'+n.id+'/generate',{method:'POST'});
-    const w=window.open('','_blank');w.document.write('<pre style="background:#111;color:#eee;padding:20px;font-size:12px">'+JSON.stringify(cfg,null,2)+'</pre>');
+    const w=window.open('','_blank');if(w)w.document.write('<pre style="background:#f9fafb;color:#111;padding:20px;font-size:12px;font-family:monospace">'+JSON.stringify(cfg,null,2)+'</pre>');
   },
   async pushAll(){
-    if(!confirm('Push config to ALL nodes?'))return;
-    try{const r=await this.api('/api/batch/push-all',{method:'POST'});this.toast('Pushed to '+r.length+' nodes')}
-    catch(e){this.toast('Push failed: '+e.message,'error')}
+    if(!confirm(this.lang==='zh'?'推送到所有节点？':'Push config to ALL nodes?'))return;
+    try{const r=await this.api('/api/batch/push-all',{method:'POST'});this.toast((this.lang==='zh'?'已推送 ':'Pushed ')+r.length+(this.lang==='zh'?' 个节点':' nodes'))}
+    catch(e){this.toast(e.message,'error')}
   }
 }}
 </script>
