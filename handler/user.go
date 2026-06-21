@@ -1,0 +1,121 @@
+package handler
+
+import (
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/briqt/singbox-panel/model"
+)
+
+type UserHandler struct {
+	Store *model.UserStore
+}
+
+func (h *UserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/api/users":
+		h.list(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/users":
+		h.create(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/users/"):
+		h.get(w, r)
+	case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/users/"):
+		h.update(w, r)
+	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/users/"):
+		h.delete(w, r)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (h *UserHandler) list(w http.ResponseWriter, _ *http.Request) {
+	users, err := h.Store.List()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, users)
+}
+
+func (h *UserHandler) create(w http.ResponseWriter, r *http.Request) {
+	var req model.CreateUserReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	user, err := h.Store.Create(req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, user)
+}
+
+func (h *UserHandler) get(w http.ResponseWriter, r *http.Request) {
+	id := parseID(r.URL.Path, "/api/users/")
+	if id == 0 {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	user, err := h.Store.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
+func (h *UserHandler) update(w http.ResponseWriter, r *http.Request) {
+	id := parseID(r.URL.Path, "/api/users/")
+	if id == 0 {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var req model.UpdateUserReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	user, err := h.Store.Update(id, req)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
+func (h *UserHandler) delete(w http.ResponseWriter, r *http.Request) {
+	id := parseID(r.URL.Path, "/api/users/")
+	if id == 0 {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if err := h.Store.Delete(id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func parseID(path, prefix string) int {
+	s := strings.TrimPrefix(path, prefix)
+	s = strings.Split(s, "/")[0]
+	id, _ := strconv.Atoi(s)
+	return id
+}
+
+func writeJSON(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(data)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
