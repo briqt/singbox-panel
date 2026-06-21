@@ -1,0 +1,5 @@
+.env
+data/
+*.db
+singbox-panel
+bin/
