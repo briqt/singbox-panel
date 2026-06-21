@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"net"
 	"net/http"
 	"strings"
 
@@ -26,6 +27,19 @@ type AutoSetupReq struct {
 		Reality     int `json:"reality"`
 		HTTPUpgrade int `json:"httpupgrade"`
 	} `json:"ports"`
+}
+
+var realitySNIs = []string{
+	"www.apple.com",
+	"www.microsoft.com",
+	"www.amazon.com",
+	"www.cloudflare.com",
+	"www.mozilla.org",
+	"www.samsung.com",
+	"www.intel.com",
+	"www.nvidia.com",
+	"swcdn.apple.com",
+	"updates.cdn-apple.com",
 }
 
 func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
@@ -86,19 +100,34 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 				results = append(results, inboundResult{Protocol: proto, Status: "skipped", Details: "no domain available"})
 				continue
 			}
+			ips, dnsErr := net.LookupHost(domain)
+			if dnsErr != nil {
+				results = append(results, inboundResult{Protocol: proto, Status: "error", Details: "DNS lookup failed: " + dnsErr.Error()})
+				continue
+			}
+			dnsOK := false
+			for _, ip := range ips {
+				if ip == node.Host {
+					dnsOK = true
+				}
+			}
+			if !dnsOK {
+				results = append(results, inboundResult{Protocol: proto, Status: "error", Details: fmt.Sprintf("DNS: %s → %v, expected %s", domain, ips, node.Host)})
+				continue
+			}
 			port := req.Ports.Hysteria2
 			if port == 0 {
 				port = randomPort()
 			}
-			// Issue cert
 			certPath := fmt.Sprintf("/etc/sing-box/tls/%s.crt", domain)
 			keyPath := fmt.Sprintf("/etc/sing-box/tls/%s.key", domain)
 			certScript := fmt.Sprintf(`
 mkdir -p /etc/sing-box/tls
 if [ -f %s ] && [ -f %s ]; then echo "CERT_EXISTS"; exit 0; fi
-if ! command -v /root/.acme.sh/acme.sh &>/dev/null; then curl -sL https://get.acme.sh | sh -s email=admin@%s 2>&1; fi
+if ! command -v /root/.acme.sh/acme.sh &>/dev/null; then curl -sL https://get.acme.sh | sh -s email=acme@%s 2>&1; fi
 /root/.acme.sh/acme.sh --issue -d %s --standalone --keylength ec-256 --force 2>&1 || true
 /root/.acme.sh/acme.sh --install-cert -d %s --ecc --fullchain-file %s --key-file %s --reloadcmd "systemctl restart sing-box 2>/dev/null || true" 2>&1
+/root/.acme.sh/acme.sh --install-cronjob 2>/dev/null
 test -f %s && test -f %s && echo "CERT_OK"
 `, certPath, keyPath, domain, domain, domain, certPath, keyPath, certPath, keyPath)
 			certOut, _ := sshRun(client, certScript)
@@ -115,7 +144,6 @@ test -f %s && test -f %s && echo "CERT_OK"
 			if port == 0 {
 				port = randomPort()
 			}
-			// Generate keypair on node
 			keypairOut, err := sshRun(client, node.SingboxBin+" generate reality-keypair")
 			if err != nil {
 				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: "keypair generation failed"})
@@ -127,9 +155,11 @@ test -f %s && test -f %s && echo "CERT_OK"
 			if shortID == "" {
 				shortID = randomHex(8)
 			}
+			// Pick a random mainstream SNI for disguise
+			sni := realitySNIs[randomPort()%len(realitySNIs)]
 			settings := mustMarshal(map[string]any{
-				"sni": "www.microsoft.com", "private_key": privateKey, "public_key": publicKey,
-				"short_id": shortID, "handshake_server": "www.microsoft.com", "handshake_port": 443,
+				"sni": sni, "private_key": privateKey, "public_key": publicKey,
+				"short_id": shortID, "handshake_server": sni, "handshake_port": 443,
 				"fingerprint": "chrome",
 			})
 			h.Nodes.CreateInbound(node.ID, model.CreateInboundReq{Tag: "vless-reality", Protocol: "vless-reality", Port: port, Settings: settings})
@@ -168,8 +198,8 @@ test -f %s && test -f %s && echo "CERT_OK"
 }
 
 func randomPort() int {
-	n, _ := rand.Int(rand.Reader, big.NewInt(20000))
-	return int(n.Int64()) + 10000
+	n, _ := rand.Int(rand.Reader, big.NewInt(30000))
+	return int(n.Int64()) + 20000
 }
 
 func randomHex(bytes int) string {
