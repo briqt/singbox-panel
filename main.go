@@ -35,6 +35,7 @@ func main() {
 	batchHandler := &handler.BatchHandler{Users: userStore, Nodes: nodeStore, Config: configHandler}
 	authHandler := &handler.AuthHandler{Users: userStore, AdminToken: cfg.AdminToken}
 	accessHandler := &handler.AccessHandler{Access: accessStore, Nodes: nodeStore}
+	nodeOpsHandler := &handler.NodeOpsHandler{Nodes: nodeStore, Config: configHandler}
 
 	mux := http.NewServeMux()
 
@@ -68,6 +69,10 @@ func main() {
 		if strings.HasSuffix(path, "/generate") || strings.HasSuffix(path, "/push") ||
 			strings.HasSuffix(path, "/raw-config") {
 			configHandler.ServeHTTP(w, r)
+		} else if strings.HasSuffix(path, "/version") || strings.HasSuffix(path, "/install") ||
+			strings.HasSuffix(path, "/upgrade") || strings.HasSuffix(path, "/status") ||
+			strings.HasSuffix(path, "/setup-ssh") {
+			nodeOpsHandler.ServeHTTP(w, r)
 		} else {
 			nodeHandler.ServeHTTP(w, r)
 		}
