@@ -178,6 +178,7 @@
             </td>
             <td class="px-4 py-3">
               <div class="flex items-center justify-end gap-1">
+                <button @click="editUser(u)" class="px-2 py-1 text-xs text-blue-500 hover:bg-blue-50 rounded transition">Edit</button>
                 <button @click="toggleUser(u)" :class="u.enabled?'text-emerald-600':'text-gray-400'" class="px-2 py-1 text-xs rounded hover:bg-gray-100 transition" x-text="u.enabled?'on':'off'"></button>
                 <button @click="showAccessModal(u)" class="px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 rounded transition" x-text="T('access')"></button>
                 <button @click="resetTraffic(u)" class="px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 rounded transition" x-text="T('reset')"></button>
@@ -211,10 +212,13 @@
               <span x-text="n.host" class="text-xs text-gray-400 font-mono"></span>
             </div>
             <div class="flex items-center gap-1">
+              <button @click.stop="moveNode(n,-1)" class="text-gray-300 hover:text-gray-600 text-xs px-1" title="Move up">▲</button>
+              <button @click.stop="moveNode(n,1)" class="text-gray-300 hover:text-gray-600 text-xs px-1" title="Move down">▼</button>
               <template x-if="nodeStatuses[n.id]">
                 <div class="flex items-center gap-1.5 mr-2">
                   <span :class="nodeStatuses[n.id].running?'bg-emerald-500':'bg-yellow-400'" class="w-1.5 h-1.5 rounded-full"></span>
                   <span class="text-[10px] text-gray-400" x-text="nodeStatuses[n.id].version||T('notInstalled')"></span>
+                  <span class="text-[10px] text-gray-400" x-text="nodeStatuses[n.id].ping_ms?nodeStatuses[n.id].ping_ms+'ms':''"></span>
                 </div>
               </template>
               <span class="text-gray-300 text-xs" x-text="expandedNodes[n.id]?'▾':'▸'"></span>
@@ -234,6 +238,15 @@
               <button @click.stop="showRawConfig(n)" class="px-2.5 py-1.5 text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-md transition" x-text="T('rawConfig')"></button>
               <button @click.stop="deleteNode(n)" class="px-2.5 py-1.5 text-xs border border-red-200 bg-white hover:bg-red-50 text-red-500 rounded-md transition" x-text="T('del')"></button>
             </div>
+            <!-- System Info -->
+            <template x-if="nodeStatuses[n.id]&&nodeStatuses[n.id].reachable">
+              <div class="px-4 py-2 bg-gray-50/50 border-b border-gray-100 flex flex-wrap gap-4 text-[11px] text-gray-500">
+                <span x-show="nodeStatuses[n.id].ping_ms"><span class="text-gray-400">Ping</span> <span class="font-mono" x-text="nodeStatuses[n.id].ping_ms+'ms'" :class="nodeStatuses[n.id].ping_ms<100?'text-emerald-600':nodeStatuses[n.id].ping_ms<300?'text-yellow-600':'text-red-500'"></span></span>
+                <span x-show="nodeStatuses[n.id].mem_total"><span class="text-gray-400">Mem</span> <span class="font-mono" x-text="fmtBytes(nodeStatuses[n.id].mem_total-nodeStatuses[n.id].mem_available)+' / '+fmtBytes(nodeStatuses[n.id].mem_total)"></span></span>
+                <span x-show="nodeStatuses[n.id].disk_total"><span class="text-gray-400">Disk</span> <span class="font-mono" x-text="fmtBytes(nodeStatuses[n.id].disk_used)+' / '+fmtBytes(nodeStatuses[n.id].disk_total)"></span></span>
+                <span x-show="nodeStatuses[n.id].uptime"><span class="text-gray-400">Up</span> <span class="font-mono" x-text="fmtUptime(nodeStatuses[n.id].uptime)"></span></span>
+              </div>
+            </template>
             <!-- Inbounds -->
             <div class="px-4 py-3">
               <div class="text-xs text-gray-400 mb-2 font-medium" x-text="T('inbounds')"></div>
@@ -246,7 +259,11 @@
                             x-text="ib.protocol"></span>
                       <span class="text-gray-700 font-mono" x-text="':'+ib.port"></span>
                       <span class="text-gray-400" x-text="ib.tag"></span>
-                      <button @click.stop="deleteInbound(ib)" class="ml-auto text-red-300 hover:text-red-500 transition text-[10px]">✕</button>
+                      <div class="ml-auto flex items-center gap-1">
+                        <button @click.stop="moveInbound(n,ib,-1)" class="text-gray-300 hover:text-gray-600 px-0.5">▲</button>
+                        <button @click.stop="moveInbound(n,ib,1)" class="text-gray-300 hover:text-gray-600 px-0.5">▼</button>
+                        <button @click.stop="deleteInbound(ib)" class="text-red-300 hover:text-red-500 transition text-[10px] ml-1">✕</button>
+                      </div>
                     </div>
                   </template>
                   <div x-show="!(nodeDetails[n.id]?.inbounds?.length)" class="text-xs text-gray-400 italic py-1" x-text="T('noInbounds')"></div>
@@ -260,28 +277,81 @@
   </div>
 
   <!-- Stats Tab -->
-  <div x-show="tab==='stats'">
-    <h2 class="text-lg font-semibold text-gray-900 mb-4" x-text="T('trafficStats')"></h2>
-    <div class="bg-white border border-gray-200 rounded-xl overflow-hidden">
+  <div x-show="tab==='stats'" x-init="$watch('tab',v=>{if(v==='stats')loadStats()})">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold text-gray-900" x-text="T('trafficStats')"></h2>
+      <select x-model="statsDays" @change="loadStats()" class="px-2 py-1 text-xs border border-gray-200 rounded-lg bg-white">
+        <option value="7">7 days</option>
+        <option value="14">14 days</option>
+        <option value="30">30 days</option>
+      </select>
+    </div>
+    <!-- Chart -->
+    <div class="bg-white border border-gray-200 rounded-xl p-4 mb-4">
+      <div class="text-xs text-gray-400 mb-2" x-text="lang==='zh'?'每日流量趋势':'Daily Traffic Trend'"></div>
+      <div class="h-40 relative" x-ref="chartWrap">
+        <svg width="100%" height="100%" :viewBox="'0 0 '+(statsChart.w||600)+' 160'" preserveAspectRatio="none" x-show="statsChart.points?.length">
+          <polyline :points="statsChart.upLine||''" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linejoin="round"/>
+          <polyline :points="statsChart.downLine||''" fill="none" stroke="#22c55e" stroke-width="2" stroke-linejoin="round"/>
+          <template x-for="(p,i) in statsChart.points||[]" :key="i">
+            <g>
+              <circle :cx="p.x" :cy="p.uy" r="3" fill="#3b82f6" opacity="0.7"/>
+              <circle :cx="p.x" :cy="p.dy" r="3" fill="#22c55e" opacity="0.7"/>
+              <title x-text="p.day+' ↑'+fmtBytes(p.up)+' ↓'+fmtBytes(p.down)"></title>
+            </g>
+          </template>
+        </svg>
+        <div x-show="!statsChart.points?.length" class="absolute inset-0 flex items-center justify-center text-xs text-gray-300" x-text="lang==='zh'?'暂无数据':'No data'"></div>
+      </div>
+      <div class="flex items-center gap-4 mt-2 text-[11px] text-gray-400">
+        <span><span class="inline-block w-3 h-0.5 bg-blue-500 mr-1 align-middle"></span>Upload</span>
+        <span><span class="inline-block w-3 h-0.5 bg-emerald-500 mr-1 align-middle"></span>Download</span>
+      </div>
+    </div>
+    <!-- User stats -->
+    <div class="bg-white border border-gray-200 rounded-xl overflow-hidden mb-4">
+      <div class="px-4 py-2 border-b border-gray-100 text-xs text-gray-400 font-medium" x-text="lang==='zh'?'用户流量':'User Traffic'"></div>
       <table class="w-full text-sm">
         <thead><tr class="border-b border-gray-100 text-xs text-gray-400 uppercase tracking-wider">
-          <th class="px-4 py-3 text-left" x-text="T('user')"></th>
-          <th class="px-4 py-3 text-left" x-text="T('used')"></th>
-          <th class="px-4 py-3 text-left" x-text="T('limit')"></th>
-          <th class="px-4 py-3 text-left" x-text="T('usage')"></th>
+          <th class="px-4 py-2 text-left" x-text="T('user')"></th>
+          <th class="px-4 py-2 text-left">↑ Upload</th>
+          <th class="px-4 py-2 text-left">↓ Download</th>
+          <th class="px-4 py-2 text-left" x-text="T('limit')"></th>
+          <th class="px-4 py-2 text-left" x-text="T('usage')"></th>
         </tr></thead>
         <tbody>
         <template x-for="s in statsUsers" :key="s.id">
           <tr class="border-b border-gray-50">
-            <td class="px-4 py-3 text-gray-700" x-text="s.name"></td>
-            <td class="px-4 py-3 text-xs font-mono text-gray-500" x-text="fmtBytes(s.used_bytes)"></td>
-            <td class="px-4 py-3 text-xs font-mono text-gray-500" x-text="s.limit_bytes?fmtBytes(s.limit_bytes):'∞'"></td>
-            <td class="px-4 py-3">
-              <div class="w-32 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+            <td class="px-4 py-2 text-gray-700" x-text="s.name"></td>
+            <td class="px-4 py-2 text-xs font-mono text-blue-500" x-text="fmtBytes(s.up_bytes||0)"></td>
+            <td class="px-4 py-2 text-xs font-mono text-emerald-500" x-text="fmtBytes(s.down_bytes||0)"></td>
+            <td class="px-4 py-2 text-xs font-mono text-gray-500" x-text="s.limit_bytes?fmtBytes(s.limit_bytes):'∞'"></td>
+            <td class="px-4 py-2">
+              <div class="w-24 h-1.5 bg-gray-100 rounded-full overflow-hidden">
                 <div class="h-full rounded-full" :class="s.limit_bytes&&s.used_bytes/s.limit_bytes>0.8?'bg-red-500':'bg-blue-500'"
                      :style="'width:'+Math.min(100,s.limit_bytes?Math.round(s.used_bytes/s.limit_bytes*100):0)+'%'"></div>
               </div>
             </td>
+          </tr>
+        </template>
+        </tbody>
+      </table>
+    </div>
+    <!-- Node stats -->
+    <div class="bg-white border border-gray-200 rounded-xl overflow-hidden">
+      <div class="px-4 py-2 border-b border-gray-100 text-xs text-gray-400 font-medium" x-text="lang==='zh'?'节点流量':'Node Traffic'"></div>
+      <table class="w-full text-sm">
+        <thead><tr class="border-b border-gray-100 text-xs text-gray-400 uppercase tracking-wider">
+          <th class="px-4 py-2 text-left" x-text="T('nodes')"></th>
+          <th class="px-4 py-2 text-left">↑ Upload</th>
+          <th class="px-4 py-2 text-left">↓ Download</th>
+        </tr></thead>
+        <tbody>
+        <template x-for="s in statsNodes" :key="s.id">
+          <tr class="border-b border-gray-50">
+            <td class="px-4 py-2 text-gray-700" x-text="s.name"></td>
+            <td class="px-4 py-2 text-xs font-mono text-blue-500" x-text="fmtBytes(s.up_bytes)"></td>
+            <td class="px-4 py-2 text-xs font-mono text-emerald-500" x-text="fmtBytes(s.down_bytes)"></td>
           </tr>
         </template>
         </tbody>
@@ -356,6 +426,40 @@
       <div class="flex justify-end gap-2 mt-5">
         <button @click="showCreateUser=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition" x-text="T('cancel')"></button>
         <button @click="createUser()" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition" x-text="T('create')"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit User Modal -->
+  <div x-show="showEditUser" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" @click.self="showEditUser=false">
+    <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-sm shadow-xl">
+      <h3 class="text-sm font-semibold text-gray-900 mb-4" x-text="(lang==='zh'?'编辑用户: ':'Edit User: ')+(editingUser?.name||'')"></h3>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block" x-text="lang==='zh'?'状态':'Status'"></label>
+          <button @click="editingUser.enabled=!editingUser.enabled" :class="editingUser.enabled?'bg-emerald-500':'bg-gray-300'" class="relative w-10 h-5 rounded-full transition">
+            <span :class="editingUser.enabled?'translate-x-5':'translate-x-0.5'" class="absolute top-0.5 left-0 w-4 h-4 bg-white rounded-full transition shadow"></span>
+          </button>
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block" x-text="lang==='zh'?'流量限额 (GB, 0=无限)':'Traffic Limit (GB, 0=unlimited)'"></label>
+          <input x-model.number="editingUser.traffic_limit_gb" type="number" min="0" step="1" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition">
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block" x-text="lang==='zh'?'到期时间 (留空=无限期)':'Expire Date (empty=never)'"></label>
+          <div class="flex items-center gap-2">
+            <input x-model="editingUser.expire_at" type="date" class="flex-1 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition text-gray-500">
+            <button @click="editingUser.expire_at=''" class="px-2 py-1.5 text-xs text-gray-400 hover:text-gray-700 border border-gray-200 rounded-lg" x-text="lang==='zh'?'无限期':'Never'"></button>
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block" x-text="lang==='zh'?'流量重置日 (每月几号, 1-28)':'Traffic Reset Day (1-28)'"></label>
+          <input x-model.number="editingUser.traffic_reset_day" type="number" min="1" max="28" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition">
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 mt-5">
+        <button @click="showEditUser=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition" x-text="T('cancel')"></button>
+        <button @click="saveEditUser()" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition" x-text="lang==='zh'?'保存':'Save'"></button>
       </div>
     </div>
   </div>
@@ -480,6 +584,7 @@
 
 <script>
 function fmtBytes(b){if(!b||b===0)return'0 B';const u=['B','KB','MB','GB','TB'];const i=Math.floor(Math.log(b)/Math.log(1024));return(b/Math.pow(1024,i)).toFixed(i>0?2:0)+' '+u[i]}
+function fmtUptime(s){if(!s)return'';const d=Math.floor(s/86400),h=Math.floor(s%86400/3600);return d>0?d+'d '+h+'h':h+'h'}
 
 const I18N={
   en:{overview:'Overview',users:'Users',nodes:'Nodes',stats:'Stats',signOut:'Sign out',signIn:'Sign In',loginHint:'Sign in to continue',
@@ -518,11 +623,13 @@ function app(){return{
   showRegForm:false,regUser:'',regPass:'',
   lang:localStorage.getItem('panel_lang')||(navigator.language.startsWith('zh')?'zh':'en'),
   tab:'',
-  users:[],nodes:[],statsUsers:[],
+  users:[],nodes:[],statsUsers:[],statsNodes:[],statsDays:'7',statsChart:{},
   meData:null,myNodes:[],
   toasts:[],
   showCreateUser:false,
   newUser:{name:'',traffic_limit_gb:100,expire_at:''},
+  showEditUser:false,
+  editingUser:{id:0,name:'',enabled:true,traffic_limit_gb:0,expire_at:'',traffic_reset_day:1},
   showCreateNode:false,
   newNode:{name:'',host:'',domain:'',port:22,ssh_user:'root'},
   showAccess:false,accessUser:null,accessNodeIds:[],
@@ -569,13 +676,37 @@ function app(){return{
       if(this.role==='admin'){
         if(this.tab==='dash'||this.tab==='users'){this.users=await this.api('/api/users')||[]}
         if(this.tab==='dash'||this.tab==='nodes'){this.nodes=await this.api('/api/nodes')||[]}
-        if(this.tab==='stats'){this.statsUsers=await this.api('/api/stats/users')||[]}
+        if(this.tab==='stats'){this.loadStats()}
       }
       if(this.tab==='myinfo'){
         this.meData=await this.api('/api/me');
         this.myNodes=await this.api('/api/me/nodes')||[];
       }
     }catch(e){if(e.message==='unauthorized'||e.message==='invalid token'){this.logout()}else{this.toast(e.message,'error')}}
+  },
+  async loadStats(){
+    const [users, nodes, history] = await Promise.all([
+      this.api('/api/stats/users'),
+      this.api('/api/stats/nodes'),
+      this.api('/api/stats/traffic?days='+this.statsDays)
+    ]);
+    this.statsUsers = users || [];
+    this.statsNodes = nodes || [];
+    this.buildChart(history || []);
+  },
+  buildChart(data){
+    if(!data.length){this.statsChart={};return}
+    const w=600, h=140, px=30, py=10;
+    const maxVal=Math.max(...data.map(d=>Math.max(d.up,d.down)),1);
+    const points=data.map((d,i)=>{
+      const x=px+i*(w-2*px)/(data.length-1||1);
+      return {x, uy:py+(1-d.up/maxVal)*(h-2*py), dy:py+(1-d.down/maxVal)*(h-2*py), day:d.day, up:d.up, down:d.down};
+    });
+    this.statsChart={
+      w, points,
+      upLine: points.map(p=>p.x+','+p.uy).join(' '),
+      downLine: points.map(p=>p.x+','+p.dy).join(' ')
+    };
   },
   toast(msg,type='success'){this.toasts.push({id:Date.now()+Math.random(),msg,type})},
   async api(path,opts={}){
@@ -593,6 +724,27 @@ function app(){return{
     await this.api('/api/users',{method:'POST',body:JSON.stringify(body)});
     this.showCreateUser=false;this.newUser={name:'',traffic_limit_gb:100,expire_at:''};
     this.toast(this.lang==='zh'?'用户已创建':'User created');this.loadTab();
+  },
+  editUser(u){
+    this.editingUser={
+      id:u.id, name:u.name, enabled:u.enabled,
+      traffic_limit_gb: u.traffic_limit_bytes ? Math.round(u.traffic_limit_bytes/1073741824*100)/100 : 0,
+      expire_at: u.expire_at ? u.expire_at.split(' ')[0] : '',
+      traffic_reset_day: u.traffic_reset_day || 1
+    };
+    this.showEditUser=true;
+  },
+  async saveEditUser(){
+    const u=this.editingUser;
+    const body={
+      enabled:u.enabled,
+      traffic_limit_bytes:Math.round(u.traffic_limit_gb*1073741824),
+      expire_at: u.expire_at ? u.expire_at+' 00:00:00' : '',
+      traffic_reset_day: u.traffic_reset_day
+    };
+    await this.api('/api/users/'+u.id,{method:'PUT',body:JSON.stringify(body)});
+    this.showEditUser=false;
+    this.toast(this.lang==='zh'?'已保存':'Saved');this.loadTab();
   },
   async toggleUser(u){
     await this.api('/api/users/'+u.id,{method:'PUT',body:JSON.stringify({enabled:!u.enabled})});
@@ -646,6 +798,25 @@ function app(){return{
     this.toast(this.lang==='zh'?'已删除':'Deleted');
     const nodeId=ib.node_id;if(nodeId&&this.nodeDetails[nodeId])this.nodeDetails[nodeId]=await this.api('/api/nodes/'+nodeId);
   },
+  async moveNode(n, dir){
+    const idx=this.nodes.findIndex(x=>x.id===n.id);
+    const swapIdx=idx+dir;
+    if(swapIdx<0||swapIdx>=this.nodes.length)return;
+    [this.nodes[idx],this.nodes[swapIdx]]=[this.nodes[swapIdx],this.nodes[idx]];
+    const items=this.nodes.map((x,i)=>({id:x.id,sort_order:i}));
+    await this.api('/api/nodes/reorder',{method:'PUT',body:JSON.stringify(items)});
+    this.loadTab();
+  },
+  async moveInbound(n, ib, dir){
+    const ibs=this.nodeDetails[n.id]?.inbounds;if(!ibs)return;
+    const idx=ibs.findIndex(x=>x.id===ib.id);
+    const swapIdx=idx+dir;
+    if(swapIdx<0||swapIdx>=ibs.length)return;
+    [ibs[idx],ibs[swapIdx]]=[ibs[swapIdx],ibs[idx]];
+    const items=ibs.map((x,i)=>({id:x.id,sort_order:i}));
+    await this.api('/api/nodes/'+n.id+'/inbounds/reorder',{method:'PUT',body:JSON.stringify(items)});
+    this.nodeDetails[n.id]=await this.api('/api/nodes/'+n.id);
+  },
 
   async toggleNodeDetail(n){
     if(this.expandedNodes[n.id]){delete this.expandedNodes[n.id];return}
@@ -655,9 +826,19 @@ function app(){return{
   async checkNodeStatus(n){
     try{
       const s=await this.api('/api/nodes/'+n.id+'/status');
+      // Client-side ping: measure TCP connect time to node
+      s.ping_ms = await this.pingNode(n);
       this.nodeStatuses[n.id]=s;
-      this.toast(n.name+': '+(s.running?'running':'stopped')+' '+(s.version||''));
+      this.toast(n.name+': '+(s.running?'running':'stopped')+' '+(s.version||'')+' ping='+s.ping_ms+'ms');
     }catch(e){this.toast(e.message,'error')}
+  },
+  async pingNode(n){
+    const target = n.domain || n.host;
+    const port = 443;
+    const url = 'https://'+target+':'+port;
+    const t0 = performance.now();
+    try{ await fetch(url,{mode:'no-cors',cache:'no-store',signal:AbortSignal.timeout(3000)}); }catch(_){}
+    return Math.round(performance.now()-t0);
   },
   showSetupSSHModal(n){this.sshNode=n;this.sshPassword='';this.showSSHSetup=true},
   async doSetupSSH(){
@@ -704,8 +885,11 @@ function app(){return{
     catch(e){this.toast(e.message,'error')}
   },
   async generateNode(n){
-    const cfg=await this.api('/api/nodes/'+n.id+'/generate',{method:'POST'});
-    const w=window.open('','_blank');if(w)w.document.write('<pre style="background:#f9fafb;color:#111;padding:20px;font-size:12px;font-family:monospace;white-space:pre-wrap">'+JSON.stringify(cfg,null,2)+'</pre>');
+    this.rawCfgNode=n;this.rawCfgContent='loading...';this.showRawCfg=true;
+    try{
+      const cfg=await this.api('/api/nodes/'+n.id+'/generate',{method:'POST'});
+      this.rawCfgContent=JSON.stringify(cfg,null,2);
+    }catch(e){this.rawCfgContent='// '+e.message}
   },
   async showRawConfig(n){
     this.rawCfgNode=n;this.rawCfgContent='';this.showRawCfg=true;

@@ -33,6 +33,10 @@ func migrate(db *sql.DB) error {
 	db.Exec(`ALTER TABLE nodes ADD COLUMN ssh_password TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE users ADD COLUMN traffic_reset_day INTEGER NOT NULL DEFAULT 0`)
 	db.Exec(`ALTER TABLE users ADD COLUMN traffic_last_reset TEXT NOT NULL DEFAULT ''`)
+	db.Exec(`ALTER TABLE nodes ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE node_inbounds ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE users ADD COLUMN traffic_up_bytes INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE users ADD COLUMN traffic_down_bytes INTEGER NOT NULL DEFAULT 0`)
 	return nil
 }
 

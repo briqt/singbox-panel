@@ -185,3 +185,31 @@ func (h *NodeHandler) deleteInbound(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
+
+func (h *NodeHandler) Reorder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.NotFound(w, r)
+		return
+	}
+	var items []model.ReorderItem
+	if err := json.NewDecoder(r.Body).Decode(&items); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	h.Store.ReorderNodes(items)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *NodeHandler) ReorderInbounds(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.NotFound(w, r)
+		return
+	}
+	var items []model.ReorderItem
+	if err := json.NewDecoder(r.Body).Decode(&items); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	h.Store.ReorderInbounds(items)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
