@@ -22,12 +22,15 @@ func main() {
 
 	userStore := &model.UserStore{DB: database}
 	nodeStore := &model.NodeStore{DB: database}
+	accessStore := &model.AccessStore{DB: database}
 
 	userHandler := &handler.UserHandler{Store: userStore}
 	nodeHandler := &handler.NodeHandler{Store: nodeStore}
-	subHandler := &handler.SubscriptionHandler{Users: userStore, Nodes: nodeStore}
-	configHandler := &handler.ConfigHandler{Users: userStore, Nodes: nodeStore, SSHKeyPath: cfg.SSHKeyPath}
+	subHandler := &handler.SubscriptionHandler{Users: userStore, Nodes: nodeStore, Access: accessStore}
+	configHandler := &handler.ConfigHandler{Users: userStore, Nodes: nodeStore, Access: accessStore, SSHKeyPath: cfg.SSHKeyPath}
 	batchHandler := &handler.BatchHandler{Users: userStore, Nodes: nodeStore, Config: configHandler}
+	authHandler := &handler.AuthHandler{Users: userStore, AdminToken: cfg.AdminToken}
+	accessHandler := &handler.AccessHandler{Access: accessStore, Nodes: nodeStore}
 
 	mux := http.NewServeMux()
 
@@ -36,11 +39,20 @@ func main() {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	// User CRUD + batch ops
-	mux.HandleFunc("/api/users", adminAuth(cfg.AdminToken, userHandler.ServeHTTP))
-	mux.HandleFunc("/api/users/", adminAuth(cfg.AdminToken, userHandler.ServeHTTP))
+	// Public: registration
+	mux.HandleFunc("/api/register", authHandler.HandleRegister)
 
-	// Node CRUD + config ops
+	// User CRUD + batch ops (admin)
+	mux.HandleFunc("/api/users", adminAuth(cfg.AdminToken, userHandler.ServeHTTP))
+	mux.HandleFunc("/api/users/", adminAuth(cfg.AdminToken, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/access") {
+			accessHandler.ServeHTTP(w, r)
+		} else {
+			userHandler.ServeHTTP(w, r)
+		}
+	}))
+
+	// Node CRUD + config ops (admin)
 	mux.HandleFunc("/api/nodes", adminAuth(cfg.AdminToken, nodeHandler.ServeHTTP))
 	mux.HandleFunc("/api/nodes/", adminAuth(cfg.AdminToken, func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
@@ -53,11 +65,11 @@ func main() {
 	}))
 	mux.HandleFunc("/api/inbounds/", adminAuth(cfg.AdminToken, nodeHandler.ServeHTTP))
 
-	// Batch operations
+	// Batch operations (admin)
 	mux.HandleFunc("/api/batch/push-all", adminAuth(cfg.AdminToken, batchHandler.PushAll))
 	mux.HandleFunc("/api/batch/template", adminAuth(cfg.AdminToken, batchHandler.ApplyTemplate))
 
-	// Stats
+	// Stats (admin)
 	mux.HandleFunc("/api/stats/users", adminAuth(cfg.AdminToken, configHandler.HandleUserStats))
 	mux.HandleFunc("/api/stats/nodes", adminAuth(cfg.AdminToken, configHandler.HandleNodeStats))
 

@@ -29,6 +29,7 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	db.Exec(`ALTER TABLE nodes ADD COLUMN domain TEXT NOT NULL DEFAULT ''`)
+	db.Exec(`ALTER TABLE users ADD COLUMN password TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 
@@ -85,4 +86,13 @@ CREATE TABLE IF NOT EXISTS traffic_logs (
 
 CREATE INDEX IF NOT EXISTS idx_traffic_user ON traffic_logs(user_id, recorded_at);
 CREATE INDEX IF NOT EXISTS idx_traffic_node ON traffic_logs(node_id, recorded_at);
+
+CREATE TABLE IF NOT EXISTS user_access (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	user_id INTEGER NOT NULL,
+	node_id INTEGER NOT NULL,
+	UNIQUE(user_id, node_id),
+	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+	FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+);
 `

@@ -11,8 +11,9 @@ import (
 )
 
 type SubscriptionHandler struct {
-	Users *model.UserStore
-	Nodes *model.NodeStore
+	Users  *model.UserStore
+	Nodes  *model.NodeStore
+	Access *model.AccessStore
 }
 
 func (h *SubscriptionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -34,9 +35,15 @@ func (h *SubscriptionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	accessibleNodes, _ := h.Access.ListNodeIDs(user.ID)
+	accessSet := make(map[int]bool, len(accessibleNodes))
+	for _, id := range accessibleNodes {
+		accessSet[id] = true
+	}
+
 	var nodesWithInbounds []model.NodeWithInbounds
 	for _, n := range nodes {
-		if !n.Enabled {
+		if !n.Enabled || !accessSet[n.ID] {
 			continue
 		}
 		inbounds, err := h.Nodes.ListInbounds(n.ID)

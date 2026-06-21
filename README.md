@@ -67,10 +67,18 @@ All admin endpoints require `Authorization: Bearer <ADMIN_TOKEN>`.
 
 ### Users
 - `GET /api/users` — list users
-- `POST /api/users` — create user
+- `POST /api/users` — create user (admin, enabled by default)
+- `POST /api/register` — public registration (disabled by default, no node access)
 - `GET /api/users/{id}` — get user
-- `PUT /api/users/{id}` — update user
+- `PUT /api/users/{id}` — update user (enable/disable, set limits)
 - `DELETE /api/users/{id}` — delete user
+- `POST /api/users/{id}/reset-traffic` — reset used traffic to 0
+- `POST /api/users/{id}/reset-sub-token` — regenerate subscription token
+
+### Access Control
+- `GET /api/users/{id}/access` — list accessible nodes
+- `POST /api/users/{id}/access` — grant node access (`{"node_id":1}` or `{"all":true}`)
+- `DELETE /api/users/{id}/access` — revoke node access
 
 ### Nodes
 - `GET /api/nodes` — list nodes
