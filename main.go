@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"log"
 	"net/http"
 	"strings"
@@ -10,6 +11,9 @@ import (
 	"github.com/briqt/singbox-panel/handler"
 	"github.com/briqt/singbox-panel/model"
 )
+
+//go:embed web/index.html
+var adminHTML []byte
 
 func main() {
 	cfg := config.Load()
@@ -33,6 +37,11 @@ func main() {
 	accessHandler := &handler.AccessHandler{Access: accessStore, Nodes: nodeStore}
 
 	mux := http.NewServeMux()
+
+	mux.HandleFunc("/admin", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(adminHTML)
+	})
 
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
