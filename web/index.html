@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SingBox Panel</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>[x-cloak]{display:none!important}</style>
+</head>
+<body class="bg-slate-900 text-slate-200 min-h-screen">
+<div x-data="app()" x-cloak>
+<!-- Toast -->
+<div class="fixed top-4 right-4 z-50 space-y-2">
+  <template x-for="t in toasts" :key="t.id">
+    <div :class="t.type==='error'?'bg-red-600':'bg-emerald-600'" class="px-4 py-2 rounded shadow text-sm text-white" x-text="t.msg"
+         x-init="setTimeout(()=>toasts=toasts.filter(x=>x.id!==t.id),3000)"></div>
+  </template>
+</div>
+
+<!-- Login -->
+<template x-if="!authed">
+<div class="flex items-center justify-center min-h-screen">
+  <div class="bg-slate-800 p-8 rounded-lg shadow-lg w-full max-w-sm">
+    <h1 class="text-xl font-bold mb-6 text-center">SingBox Panel</h1>
+    <input x-model="tokenInput" type="password" placeholder="Admin Token" class="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 mb-4 text-sm" @keydown.enter="login()">
+    <button @click="login()" class="w-full bg-blue-600 hover:bg-blue-500 text-white py-2 rounded text-sm font-medium">Login</button>
+  </div>
+</div>
+</template>
+
+<!-- Main -->
+<template x-if="authed">
+<div class="max-w-7xl mx-auto px-4 py-4">
+  <!-- Header -->
+  <div class="flex items-center justify-between mb-4">
+    <h1 class="text-lg font-bold">SingBox Panel</h1>
+    <button @click="logout()" class="text-xs text-slate-400 hover:text-white">Logout</button>
+  </div>
+  <!-- Tabs -->
+  <nav class="flex gap-1 mb-4 border-b border-slate-700 pb-2">
+    <template x-for="t in ['dashboard','users','nodes','stats']">
+      <button @click="tab=t" :class="tab===t?'bg-slate-700 text-white':'text-slate-400 hover:text-white'" class="px-3 py-1.5 rounded text-sm capitalize" x-text="t"></button>
+    </template>
+  </nav>
+
+  <!-- Dashboard -->
+  <div x-show="tab==='dashboard'" x-init="$watch('tab',v=>{if(v==='dashboard')loadDashboard()})">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="bg-slate-800 rounded p-3"><div class="text-xs text-slate-400">Users</div><div class="text-xl font-bold" x-text="dash.userCount"></div></div>
+      <div class="bg-slate-800 rounded p-3"><div class="text-xs text-slate-400">Nodes</div><div class="text-xl font-bold" x-text="dash.nodeCount"></div></div>
+    </div>
+    <div class="grid lg:grid-cols-2 gap-4">
+      <div class="bg-slate-800 rounded p-3">
+        <h3 class="text-sm font-medium mb-2">Users</h3>
+        <div class="overflow-x-auto"><table class="w-full text-xs">
+          <thead><tr class="text-slate-400 border-b border-slate-700"><th class="text-left py-1">Name</th><th>Status</th><th>Traffic</th><th>Expires</th></tr></thead>
+          <tbody><template x-for="u in dash.users"><tr class="border-b border-slate-700/50">
+            <td class="py-1" x-text="u.name"></td>
+            <td class="text-center"><span :class="u.enabled?'bg-emerald-500/20 text-emerald-400':'bg-red-500/20 text-red-400'" class="px-1.5 py-0.5 rounded text-xs" x-text="u.enabled?'ON':'OFF'"></span></td>
+            <td class="text-center" x-text="fmtBytes(u.traffic_used_bytes)+' / '+fmtBytes(u.traffic_limit_bytes)"></td>
+            <td class="text-center" x-text="fmtDate(u.expire_at)"></td>
+          </tr></template></tbody>
+        </table></div>
+      </div>
+      <div class="bg-slate-800 rounded p-3">
+        <h3 class="text-sm font-medium mb-2">Nodes</h3>
+        <div class="overflow-x-auto"><table class="w-full text-xs">
+          <thead><tr class="text-slate-400 border-b border-slate-700"><th class="text-left py-1">Name</th><th>Host</th><th>Status</th><th>Inbounds</th></tr></thead>
+          <tbody><template x-for="n in dash.nodes"><tr class="border-b border-slate-700/50">
+            <td class="py-1" x-text="n.name"></td>
+            <td x-text="n.host"></td>
+            <td class="text-center"><span :class="n.enabled?'bg-emerald-500/20 text-emerald-400':'bg-red-500/20 text-red-400'" class="px-1.5 py-0.5 rounded text-xs" x-text="n.enabled?'ON':'OFF'"></span></td>
+            <td class="text-center" x-text="(n.inbounds||[]).length"></td>
+          </tr></template></tbody>
+        </table></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Users Tab -->
+  <div x-show="tab==='users'" x-init="$watch('tab',v=>{if(v==='users')loadUsers()})">
+    <div class="flex justify-between items-center mb-3">
+      <h2 class="text-sm font-medium">Users</h2>
+      <button @click="showCreateUser=true" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded text-xs">Create User</button>
+    </div>
+    <div class="bg-slate-800 rounded overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead><tr class="text-slate-400 border-b border-slate-700">
+          <th class="text-left p-2">Name</th><th class="p-2">Status</th><th class="p-2">Traffic</th><th class="p-2">Expires</th><th class="p-2">Sub Link</th><th class="p-2">Actions</th>
+        </tr></thead>
+        <tbody><template x-for="u in users" :key="u.id"><tr class="border-b border-slate-700/50">
+          <td class="p-2" x-text="u.name"></td>
+          <td class="p-2 text-center"><span @click="toggleUser(u)" :class="u.enabled?'bg-emerald-500/20 text-emerald-400 cursor-pointer':'bg-red-500/20 text-red-400 cursor-pointer'" class="px-1.5 py-0.5 rounded text-xs" x-text="u.enabled?'ON':'OFF'"></span></td>
+          <td class="p-2 text-center" x-text="fmtBytes(u.traffic_used_bytes)+' / '+fmtBytes(u.traffic_limit_bytes)"></td>
+          <td class="p-2 text-center" x-text="fmtDate(u.expire_at)"></td>
+          <td class="p-2 text-center"><button @click="copyText(subUrl(u))" class="text-blue-400 hover:text-blue-300 text-xs">Copy</button></td>
+          <td class="p-2 text-center space-x-1">
+            <button @click="startEdit(u)" class="text-yellow-400 hover:text-yellow-300">Edit</button>
+            <button @click="openAccess(u)" class="text-purple-400 hover:text-purple-300">Access</button>
+            <button @click="resetTraffic(u)" class="text-cyan-400 hover:text-cyan-300">Reset</button>
+            <button @click="deleteUser(u)" class="text-red-400 hover:text-red-300">Del</button>
+          </td>
+        </tr></template></tbody>
+      </table>
+    </div>
+
+    <!-- Create User Modal -->
+    <div x-show="showCreateUser" class="fixed inset-0 bg-black/50 flex items-center justify-center z-40" @click.self="showCreateUser=false">
+      <div class="bg-slate-800 rounded-lg p-6 w-full max-w-sm">
+        <h3 class="text-sm font-medium mb-4">Create User</h3>
+        <input x-model="newUser.name" placeholder="Name" class="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 mb-3 text-sm">
+        <div class="flex gap-2 mb-3">
+          <input x-model.number="newUser.traffic_limit_gb" type="number" placeholder="Traffic (GB)" class="flex-1 px-3 py-2 rounded bg-slate-700 border border-slate-600 text-sm">
+          <span class="self-center text-xs text-slate-400">GB</span>
+        </div>
+        <input x-model="newUser.expire_at" type="date" class="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 mb-4 text-sm">
+        <div class="flex gap-2 justify-end">
+          <button @click="showCreateUser=false" class="px-3 py-1.5 rounded text-xs text-slate-400 hover:text-white">Cancel</button>
+          <button @click="createUser()" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded text-xs">Create</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Edit User Modal -->
+    <template x-if="editingUser">
+    <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-40" @click.self="editingUser=null">
+      <div class="bg-slate-800 rounded-lg p-6 w-full max-w-sm">
+        <h3 class="text-sm font-medium mb-4">Edit User</h3>
+        <input x-model="editingUser.name" placeholder="Name" class="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 mb-3 text-sm">
+        <div class="flex gap-2 mb-3">
+          <input x-model.number="editingUser.traffic_limit_gb" type="number" class="flex-1 px-3 py-2 rounded bg-slate-700 border border-slate-600 text-sm">
+          <span class="self-center text-xs text-slate-400">GB</span>
+        </div>
+        <input x-model="editingUser.expire_at" type="date" class="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 mb-3 text-sm">
+        <label class="flex items-center gap-2 mb-4 text-sm"><input type="checkbox" x-model="editingUser.enabled" class="rounded"> Enabled</label>
+        <div class="flex gap-2 justify-end">
+          <button @click="editingUser=null" class="px-3 py-1.5 rounded text-xs text-slate-400 hover:text-white">Cancel</button>
+          <button @click="saveEdit()" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded text-xs">Save</button>
+        </div>
+      </div>
+    </div>
+    </template>
+
+    <!-- Access Modal -->
+    <template x-if="accessUser">
+    <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-40" @click.self="accessUser=null">
+      <div class="bg-slate-800 rounded-lg p-6 w-full max-w-md">
+        <h3 class="text-sm font-medium mb-4">Node Access: <span x-text="accessUser.name"></span></h3>
+        <div class="space-y-2 max-h-60 overflow-y-auto mb-4">
+          <template x-for="n in allNodes" :key="n.id">
+            <label class="flex items-center gap-2 text-sm"><input type="checkbox" :value="n.id" x-model="accessSelected[n.id]" class="rounded"> <span x-text="n.name"></span></label>
+          </template>
+        </div>
+        <div class="flex gap-2 justify-end">
+          <button @click="accessUser=null" class="px-3 py-1.5 rounded text-xs text-slate-400 hover:text-white">Cancel</button>
+          <button @click="saveAccess()" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded text-xs">Save</button>
+        </div>
+      </div>
+    </div>
+    </template>
+  </div>
+
+  <!-- Nodes Tab -->
+  <div x-show="tab==='nodes'" x-init="$watch('tab',v=>{if(v==='nodes')loadNodes()})">
+    <div class="flex justify-between items-center mb-3">
+      <h2 class="text-sm font-medium">Nodes</h2>
+      <button @click="pushAll()" class="bg-orange-600 hover:bg-orange-500 text-white px-3 py-1.5 rounded text-xs">Push All</button>
+    </div>
+    <div class="bg-slate-800 rounded overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead><tr class="text-slate-400 border-b border-slate-700">
+          <th class="text-left p-2">Name</th><th class="p-2">Host</th><th class="p-2">Domain</th><th class="p-2">Status</th><th class="p-2">Inbounds</th><th class="p-2">Actions</th>
+        </tr></thead>
+        <tbody><template x-for="n in nodes" :key="n.id">
+          <tr class="border-b border-slate-700/50 cursor-pointer" @click="toggleNode(n.id)">
+            <td class="p-2" x-text="n.name"></td>
+            <td class="p-2" x-text="n.host"></td>
+            <td class="p-2" x-text="n.domain||'--'"></td>
+            <td class="p-2 text-center"><span :class="n.enabled?'bg-emerald-500/20 text-emerald-400':'bg-red-500/20 text-red-400'" class="px-1.5 py-0.5 rounded text-xs" x-text="n.enabled?'ON':'OFF'"></span></td>
+            <td class="p-2 text-center" x-text="(n.inbounds||[]).length"></td>
+            <td class="p-2 text-center space-x-1" @click.stop>
+              <button @click="pushNode(n.id)" class="text-orange-400 hover:text-orange-300">Push</button>
+              <button @click="generateNode(n.id)" class="text-cyan-400 hover:text-cyan-300">Gen</button>
+              <button @click="viewRaw(n.id)" class="text-slate-400 hover:text-white">Raw</button>
+            </td>
+          </tr>
+        </template>
+        <template x-if="expandedNode&&nodeDetail">
+          <tr><td colspan="6" class="p-3 bg-slate-750">
+            <div class="text-xs text-slate-400 mb-1">Inbounds:</div>
+            <table class="w-full text-xs"><thead><tr class="text-slate-500"><th class="text-left">Tag</th><th>Protocol</th><th>Port</th></tr></thead>
+            <tbody><template x-for="ib in nodeDetail.inbounds||[]"><tr>
+              <td x-text="ib.tag"></td><td class="text-center" x-text="ib.type||ib.protocol"></td><td class="text-center" x-text="ib.listen_port||ib.port"></td>
+            </tr></template></tbody></table>
+          </td></tr>
+        </template></tbody>
+      </table>
+    </div>
+    <!-- Raw Config Modal -->
+    <div x-show="showRaw" class="fixed inset-0 bg-black/50 flex items-center justify-center z-40" @click.self="showRaw=false">
+      <div class="bg-slate-800 rounded-lg p-6 w-full max-w-2xl max-h-[80vh] overflow-auto">
+        <div class="flex justify-between items-center mb-3">
+          <h3 class="text-sm font-medium">Raw Config</h3>
+          <button @click="showRaw=false" class="text-slate-400 hover:text-white text-xs">Close</button>
+        </div>
+        <pre class="text-xs bg-slate-900 p-3 rounded overflow-auto max-h-96 whitespace-pre-wrap" x-text="rawConfig"></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stats Tab -->
+  <div x-show="tab==='stats'" x-init="$watch('tab',v=>{if(v==='stats')loadStats()})">
+    <h2 class="text-sm font-medium mb-3">Traffic Stats</h2>
+    <div class="bg-slate-800 rounded overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead><tr class="text-slate-400 border-b border-slate-700">
+          <th class="text-left p-2">User</th><th class="p-2">Used</th><th class="p-2">Limit</th><th class="p-2 w-48">Usage</th>
+        </tr></thead>
+        <tbody><template x-for="s in stats" :key="s.name||s.id"><tr class="border-b border-slate-700/50">
+          <td class="p-2" x-text="s.name"></td>
+          <td class="p-2 text-center" x-text="fmtBytes(s.used_bytes)"></td>
+          <td class="p-2 text-center" x-text="fmtBytes(s.limit_bytes)"></td>
+          <td class="p-2"><div class="w-full bg-slate-700 rounded-full h-2"><div class="h-2 rounded-full" :class="(s.limit_bytes&&s.used_bytes/s.limit_bytes>0.9)?'bg-red-500':'bg-blue-500'" :style="'width:'+Math.min(100,s.limit_bytes?Math.round(s.used_bytes/s.limit_bytes*100):0)+'%'"></div></div></td>
+        </tr></template></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+</template>
+</div>
+<script>
+function app(){return{
+  authed:!!localStorage.getItem('admin_token'),
+  tokenInput:'',
+  tab:'dashboard',
+  toasts:[],
+  tid:0,
+  // dashboard
+  dash:{userCount:0,nodeCount:0,users:[],nodes:[]},
+  // users
+  users:[],
+  showCreateUser:false,
+  newUser:{name:'',traffic_limit_gb:100,expire_at:''},
+  editingUser:null,
+  accessUser:null,
+  accessNodes:[],
+  accessSelected:{},
+  allNodes:[],
+  // nodes
+  nodes:[],
+  expandedNode:null,
+  nodeDetail:null,
+  rawConfig:'',
+  showRaw:false,
+  // stats
+  stats:[],
+
+  toast(msg,type='success'){this.toasts.push({id:++this.tid,msg,type})},
+  async api(path,opts={}){
+    const token=localStorage.getItem('admin_token');
+    const r=await fetch(path,{...opts,headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json',...(opts.headers||{})}});
+    if(!r.ok){const e=await r.text().catch(()=>'');throw new Error(e||r.statusText)}
+    const ct=r.headers.get('content-type')||'';
+    return ct.includes('json')?r.json():r.text();
+  },
+  async login(){
+    localStorage.setItem('admin_token',this.tokenInput);
+    try{await this.api('/api/health');this.authed=true;this.loadDashboard()}
+    catch(e){localStorage.removeItem('admin_token');this.toast('Login failed','error')}
+  },
+  logout(){localStorage.removeItem('admin_token');this.authed=false;this.tokenInput=''},
+  fmtBytes(b){if(b==null)return'--';if(b===0)return'0 B';const u=['B','KB','MB','GB','TB'];let i=0;let v=Number(b);while(v>=1024&&i<u.length-1){v/=1024;i++}return v.toFixed(i>1?2:0)+' '+u[i]},
+  fmtDate(d){if(!d)return'--';return new Date(d).toLocaleDateString()},
+
+  async loadDashboard(){
+    try{
+      const[users,nodes]=await Promise.all([this.api('/api/users'),this.api('/api/nodes')]);
+      this.dash.users=users||[];this.dash.nodes=nodes||[];
+      this.dash.userCount=(users||[]).length;this.dash.nodeCount=(nodes||[]).length;
+    }catch(e){this.toast('Load failed: '+e.message,'error')}
+  },
+
+  // Users
+  async loadUsers(){try{this.users=await this.api('/api/users')||[]}catch(e){this.toast(e.message,'error')}},
+  async createUser(){
+    try{
+      await this.api('/api/users',{method:'POST',body:JSON.stringify({name:this.newUser.name,traffic_limit_bytes:Math.round(this.newUser.traffic_limit_gb*1073741824),expire_at:this.newUser.expire_at||null})});
+      this.showCreateUser=false;this.newUser={name:'',traffic_limit_gb:100,expire_at:''};this.toast('User created');this.loadUsers();
+    }catch(e){this.toast(e.message,'error')}
+  },
+  async toggleUser(u){
+    try{await this.api('/api/users/'+u.id,{method:'PUT',body:JSON.stringify({enabled:!u.enabled})});this.toast('Updated');this.loadUsers()}
+    catch(e){this.toast(e.message,'error')}
+  },
+  async deleteUser(u){
+    if(!confirm('Delete user "'+u.name+'"?'))return;
+    try{await this.api('/api/users/'+u.id,{method:'DELETE'});this.toast('Deleted');this.loadUsers()}catch(e){this.toast(e.message,'error')}
+  },
+  async resetTraffic(u){
+    if(!confirm('Reset traffic for "'+u.name+'"?'))return;
+    try{await this.api('/api/users/'+u.id+'/reset-traffic',{method:'POST'});this.toast('Traffic reset');this.loadUsers()}catch(e){this.toast(e.message,'error')}
+  },
+  async resetSubToken(u){
+    if(!confirm('Reset sub token for "'+u.name+'"? Old links will stop working.'))return;
+    try{await this.api('/api/users/'+u.id+'/reset-sub-token',{method:'POST'});this.toast('Token reset');this.loadUsers()}catch(e){this.toast(e.message,'error')}
+  },
+  subUrl(u){return location.origin+'/sub/'+u.sub_token},
+  copyText(text){navigator.clipboard.writeText(text);this.toast('Copied')},
+  startEdit(u){this.editingUser=JSON.parse(JSON.stringify(u));this.editingUser.traffic_limit_gb=Number((u.traffic_limit_bytes/1073741824).toFixed(2))},
+  async saveEdit(){
+    const u=this.editingUser;
+    try{await this.api('/api/users/'+u.id,{method:'PUT',body:JSON.stringify({name:u.name,enabled:u.enabled,traffic_limit_bytes:Math.round(u.traffic_limit_gb*1073741824),expire_at:u.expire_at||null})});
+      this.editingUser=null;this.toast('Saved');this.loadUsers()}catch(e){this.toast(e.message,'error')}
+  },
+  async openAccess(u){
+    this.accessUser=u;this.accessSelected={};
+    try{
+      const[access,nodes]=await Promise.all([this.api('/api/users/'+u.id+'/access'),this.api('/api/nodes')]);
+      this.allNodes=nodes||[];(access||[]).forEach(a=>this.accessSelected[a.node_id]=true);
+    }catch(e){this.toast(e.message,'error')}
+  },
+  async saveAccess(){
+    const uid=this.accessUser.id;
+    try{
+      const current=await this.api('/api/users/'+uid+'/access')||[];
+      const currentIds=new Set(current.map(a=>a.node_id));
+      const wantIds=new Set(Object.keys(this.accessSelected).filter(k=>this.accessSelected[k]).map(Number));
+      for(const nid of wantIds){if(!currentIds.has(nid))await this.api('/api/users/'+uid+'/access',{method:'POST',body:JSON.stringify({node_id:nid})})}
+      for(const nid of currentIds){if(!wantIds.has(nid))await this.api('/api/users/'+uid+'/access',{method:'DELETE',body:JSON.stringify({node_id:nid})})}
+      this.toast('Access updated');this.accessUser=null;
+    }catch(e){this.toast(e.message,'error')}
+  },
+
+  // Nodes
+  async loadNodes(){try{this.nodes=await this.api('/api/nodes')||[]}catch(e){this.toast(e.message,'error')}},
+  async toggleNode(nid){
+    if(this.expandedNode===nid){this.expandedNode=null;this.nodeDetail=null;return}
+    try{this.nodeDetail=await this.api('/api/nodes/'+nid);this.expandedNode=nid}catch(e){this.toast(e.message,'error')}
+  },
+  async pushNode(nid){
+    if(!confirm('Push config to this node?'))return;
+    try{await this.api('/api/nodes/'+nid+'/push',{method:'POST'});this.toast('Pushed')}catch(e){this.toast(e.message,'error')}
+  },
+  async generateNode(nid){
+    try{await this.api('/api/nodes/'+nid+'/generate',{method:'POST'});this.toast('Generated')}catch(e){this.toast(e.message,'error')}
+  },
+  async viewRaw(nid){
+    try{this.rawConfig=await this.api('/api/nodes/'+nid+'/raw-config');if(typeof this.rawConfig==='object')this.rawConfig=JSON.stringify(this.rawConfig,null,2);this.showRaw=true}catch(e){this.toast(e.message,'error')}
+  },
+  async pushAll(){
+    if(!confirm('Push config to ALL nodes?'))return;
+    try{await this.api('/api/batch/push-all',{method:'POST'});this.toast('All pushed')}catch(e){this.toast(e.message,'error')}
+  },
+
+  // Stats
+  async loadStats(){try{this.stats=await this.api('/api/stats/users')||[]}catch(e){this.toast(e.message,'error')}},
+
+  init(){if(this.authed)this.loadDashboard()}
+}}
+</script>
+</div>
+</body>
+</html>
