@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,37 +10,9 @@ import (
 )
 
 type UserHandler struct {
-	Store *model.UserStore
-	Nodes *model.NodeStore
-	Batch *BatchHandler
-}
-
-func (h *UserHandler) syncNodesAsync() {
-	if h.Batch == nil || h.Nodes == nil {
-		return
-	}
-	go func() {
-		nodes, err := h.Nodes.ListEnabled()
-		if err != nil {
-			log.Printf("auto-sync: list nodes: %v", err)
-			return
-		}
-		for _, node := range nodes {
-			if node.ProxyType != "singbox" {
-				continue
-			}
-			configBytes, err := h.Batch.Config.generateConfig(node.ID)
-			if err != nil {
-				log.Printf("auto-sync %s: generate: %v", node.Name, err)
-				continue
-			}
-			if err := h.Batch.Config.pushViaSSH(&node, configBytes); err != nil {
-				log.Printf("auto-sync %s: push: %v", node.Name, err)
-				continue
-			}
-			log.Printf("auto-sync %s: ok", node.Name)
-		}
-	}()
+	Store  *model.UserStore
+	Access *model.AccessStore
+	Sync   NodeSynchronizer
 }
 
 func (h *UserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -89,7 +60,6 @@ func (h *UserHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.syncNodesAsync()
 	writeJSON(w, http.StatusCreated, user)
 }
 
@@ -113,20 +83,49 @@ func (h *UserHandler) update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	var req model.UpdateUserReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json")
-		return
-	}
-	user, err := h.Store.Update(id, req)
+	before, err := h.Store.Get(id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
-	if req.Enabled != nil {
-		h.syncNodesAsync()
+	beforeNodeIDs, err := h.Access.ListNodeIDs(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	writeJSON(w, http.StatusOK, user)
+
+	var req struct {
+		model.UpdateUserReq
+		NodeIDs *[]int `json:"node_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	var user *model.User
+	if req.NodeIDs != nil {
+		user, err = h.Store.UpdateWithAccess(id, req.UpdateUserReq, *req.NodeIDs)
+	} else {
+		user, err = h.Store.Update(id, req.UpdateUserReq)
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	afterNodeIDs, err := h.Access.ListNodeIDs(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	targetNodeIDs := changedIDs(beforeNodeIDs, afterNodeIDs)
+	if req.NodeIDs != nil || userConfigChanged(before, user) {
+		targetNodeIDs = unionIDs(beforeNodeIDs, afterNodeIDs)
+	}
+	writeJSON(w, http.StatusOK, userSyncResponse{
+		User: user,
+		Sync: syncNodes(h.Sync, targetNodeIDs),
+	})
 }
 
 func (h *UserHandler) delete(w http.ResponseWriter, r *http.Request) {
@@ -135,12 +134,23 @@ func (h *UserHandler) delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
+	nodeIDs, err := h.Access.ListNodeIDs(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if err := h.Store.Delete(id); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.syncNodesAsync()
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	if err := h.Access.RevokeAll(id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "deleted",
+		"sync":   syncNodes(h.Sync, nodeIDs),
+	})
 }
 
 func (h *UserHandler) resetTraffic(w http.ResponseWriter, r *http.Request) {
@@ -149,9 +159,28 @@ func (h *UserHandler) resetTraffic(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	h.Store.ResetTraffic(id)
+	if err := h.Store.ResetTraffic(id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	user, _ := h.Store.Get(id)
-	writeJSON(w, http.StatusOK, user)
+	nodeIDs, _ := h.Access.ListNodeIDs(id)
+	writeJSON(w, http.StatusOK, userSyncResponse{
+		User: user,
+		Sync: syncNodes(h.Sync, nodeIDs),
+	})
+}
+
+type userSyncResponse struct {
+	*model.User
+	Sync []NodeSyncResult `json:"sync"`
+}
+
+func userConfigChanged(before, after *model.User) bool {
+	return before.Name != after.Name ||
+		before.Enabled != after.Enabled ||
+		before.TrafficLimitBytes != after.TrafficLimitBytes ||
+		before.ExpireAt != after.ExpireAt
 }
 
 func (h *UserHandler) resetSubToken(w http.ResponseWriter, r *http.Request) {
