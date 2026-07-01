@@ -137,49 +137,103 @@ type UpdateNodeReq struct {
 }
 
 func (s *NodeStore) Update(id int, req UpdateNodeReq) (*Node, error) {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
 	if req.Name != nil {
-		s.DB.Exec(`UPDATE nodes SET name = ? WHERE id = ?`, *req.Name, id)
+		if _, err := tx.Exec(`UPDATE nodes SET name = ? WHERE id = ?`, *req.Name, id); err != nil {
+			return nil, err
+		}
 	}
 	if req.Host != nil {
-		s.DB.Exec(`UPDATE nodes SET host = ? WHERE id = ?`, *req.Host, id)
+		if _, err := tx.Exec(`UPDATE nodes SET host = ? WHERE id = ?`, *req.Host, id); err != nil {
+			return nil, err
+		}
 	}
 	if req.Port != nil {
-		s.DB.Exec(`UPDATE nodes SET port = ? WHERE id = ?`, *req.Port, id)
+		if _, err := tx.Exec(`UPDATE nodes SET port = ? WHERE id = ?`, *req.Port, id); err != nil {
+			return nil, err
+		}
 	}
 	if req.Domain != nil {
-		s.DB.Exec(`UPDATE nodes SET domain = ? WHERE id = ?`, *req.Domain, id)
+		if _, err := tx.Exec(`UPDATE nodes SET domain = ? WHERE id = ?`, *req.Domain, id); err != nil {
+			return nil, err
+		}
 	}
 	if req.SSHPassword != nil {
-		s.DB.Exec(`UPDATE nodes SET ssh_password = ? WHERE id = ?`, *req.SSHPassword, id)
+		if _, err := tx.Exec(`UPDATE nodes SET ssh_password = ? WHERE id = ?`, *req.SSHPassword, id); err != nil {
+			return nil, err
+		}
 	}
 	if req.SSHUser != nil {
-		s.DB.Exec(`UPDATE nodes SET ssh_user = ? WHERE id = ?`, *req.SSHUser, id)
+		if _, err := tx.Exec(`UPDATE nodes SET ssh_user = ? WHERE id = ?`, *req.SSHUser, id); err != nil {
+			return nil, err
+		}
 	}
 	if req.ProxyType != nil {
-		s.DB.Exec(`UPDATE nodes SET proxy_type = ? WHERE id = ?`, *req.ProxyType, id)
+		if _, err := tx.Exec(`UPDATE nodes SET proxy_type = ? WHERE id = ?`, *req.ProxyType, id); err != nil {
+			return nil, err
+		}
 	}
 	if req.Enabled != nil {
 		enabled := 0
 		if *req.Enabled {
 			enabled = 1
 		}
-		s.DB.Exec(`UPDATE nodes SET enabled = ? WHERE id = ?`, enabled, id)
+		if _, err := tx.Exec(`UPDATE nodes SET enabled = ? WHERE id = ?`, enabled, id); err != nil {
+			return nil, err
+		}
 	}
 	if req.ConfigPath != nil {
-		s.DB.Exec(`UPDATE nodes SET config_path = ? WHERE id = ?`, *req.ConfigPath, id)
+		if _, err := tx.Exec(`UPDATE nodes SET config_path = ? WHERE id = ?`, *req.ConfigPath, id); err != nil {
+			return nil, err
+		}
 	}
 	if req.SingboxBin != nil {
-		s.DB.Exec(`UPDATE nodes SET singbox_bin = ? WHERE id = ?`, *req.SingboxBin, id)
+		if _, err := tx.Exec(`UPDATE nodes SET singbox_bin = ? WHERE id = ?`, *req.SingboxBin, id); err != nil {
+			return nil, err
+		}
 	}
 	if req.SortOrder != nil {
-		s.DB.Exec(`UPDATE nodes SET sort_order = ? WHERE id = ?`, *req.SortOrder, id)
+		if _, err := tx.Exec(`UPDATE nodes SET sort_order = ? WHERE id = ?`, *req.SortOrder, id); err != nil {
+			return nil, err
+		}
+	}
+	var exists int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, id).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if exists == 0 {
+		return nil, sql.ErrNoRows
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return s.Get(id)
 }
 
 func (s *NodeStore) Delete(id int) error {
-	_, err := s.DB.Exec(`DELETE FROM nodes WHERE id = ?`, id)
-	return err
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM node_inbounds WHERE node_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM user_access WHERE node_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM traffic_logs WHERE node_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM nodes WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *NodeStore) ListInbounds(nodeID int) ([]NodeInbound, error) {
@@ -200,7 +254,7 @@ func (s *NodeStore) ListInbounds(nodeID int) ([]NodeInbound, error) {
 		ib.Settings = json.RawMessage(settings)
 		inbounds = append(inbounds, ib)
 	}
-	return inbounds, nil
+	return inbounds, rows.Err()
 }
 
 type CreateInboundReq struct {
@@ -220,12 +274,19 @@ func (s *NodeStore) CreateInbound(nodeID int, req CreateInboundReq) (*NodeInboun
 	if err != nil {
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return s.GetInbound(int(id))
+}
+
+func (s *NodeStore) GetInbound(id int) (*NodeInbound, error) {
 	var ib NodeInbound
 	var enabled int
 	var settingsStr string
-	err = s.DB.QueryRow(`SELECT id, node_id, tag, protocol, port, settings, enabled FROM node_inbounds WHERE id = ?`, id).
-		Scan(&ib.ID, &ib.NodeID, &ib.Tag, &ib.Protocol, &ib.Port, &settingsStr, &enabled)
+	err := s.DB.QueryRow(`SELECT id, node_id, tag, protocol, port, settings, enabled, COALESCE(sort_order,0) FROM node_inbounds WHERE id = ?`, id).
+		Scan(&ib.ID, &ib.NodeID, &ib.Tag, &ib.Protocol, &ib.Port, &settingsStr, &enabled, &ib.SortOrder)
 	if err != nil {
 		return nil, err
 	}
@@ -234,9 +295,52 @@ func (s *NodeStore) CreateInbound(nodeID int, req CreateInboundReq) (*NodeInboun
 	return &ib, nil
 }
 
+func (s *NodeStore) UpdateInbound(id int, req CreateInboundReq) (*NodeInbound, error) {
+	settings := req.Settings
+	if len(settings) == 0 {
+		settings = json.RawMessage("{}")
+	}
+	result, err := s.DB.Exec(`UPDATE node_inbounds SET tag = ?, protocol = ?, port = ?, settings = ? WHERE id = ?`,
+		req.Tag, req.Protocol, req.Port, string(settings), id)
+	if err != nil {
+		return nil, err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if updated != 1 {
+		return nil, sql.ErrNoRows
+	}
+	return s.GetInbound(id)
+}
+
+func (s *NodeStore) RestoreInbound(inbound NodeInbound) (*NodeInbound, error) {
+	enabled := 0
+	if inbound.Enabled {
+		enabled = 1
+	}
+	_, err := s.DB.Exec(`INSERT INTO node_inbounds (id, node_id, tag, protocol, port, settings, enabled, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		inbound.ID, inbound.NodeID, inbound.Tag, inbound.Protocol, inbound.Port, string(inbound.Settings), enabled, inbound.SortOrder)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetInbound(inbound.ID)
+}
+
 func (s *NodeStore) DeleteInbound(id int) error {
-	_, err := s.DB.Exec(`DELETE FROM node_inbounds WHERE id = ?`, id)
-	return err
+	result, err := s.DB.Exec(`DELETE FROM node_inbounds WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if deleted != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *NodeStore) GetByToken(token string) (*Node, error) {
@@ -270,16 +374,48 @@ type ReorderItem struct {
 	SortOrder int `json:"sort_order"`
 }
 
-func (s *NodeStore) ReorderNodes(items []ReorderItem) {
-	for _, item := range items {
-		s.DB.Exec(`UPDATE nodes SET sort_order = ? WHERE id = ?`, item.SortOrder, item.ID)
+func (s *NodeStore) ReorderNodes(items []ReorderItem) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
 	}
+	defer tx.Rollback()
+	for _, item := range items {
+		result, err := tx.Exec(`UPDATE nodes SET sort_order = ? WHERE id = ?`, item.SortOrder, item.ID)
+		if err != nil {
+			return err
+		}
+		updated, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if updated != 1 {
+			return sql.ErrNoRows
+		}
+	}
+	return tx.Commit()
 }
 
-func (s *NodeStore) ReorderInbounds(items []ReorderItem) {
-	for _, item := range items {
-		s.DB.Exec(`UPDATE node_inbounds SET sort_order = ? WHERE id = ?`, item.SortOrder, item.ID)
+func (s *NodeStore) ReorderInbounds(nodeID int, items []ReorderItem) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
 	}
+	defer tx.Rollback()
+	for _, item := range items {
+		result, err := tx.Exec(`UPDATE node_inbounds SET sort_order = ? WHERE id = ? AND node_id = ?`, item.SortOrder, item.ID, nodeID)
+		if err != nil {
+			return err
+		}
+		updated, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if updated != 1 {
+			return sql.ErrNoRows
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *NodeStore) ListEnabled() ([]Node, error) {

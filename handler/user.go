@@ -114,6 +114,7 @@ func (h *UserHandler) update(w http.ResponseWriter, r *http.Request) {
 	}
 	afterNodeIDs, err := h.Access.ListNodeIDs(id)
 	if err != nil {
+		h.restoreUser(before, beforeNodeIDs)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -122,9 +123,23 @@ func (h *UserHandler) update(w http.ResponseWriter, r *http.Request) {
 	if req.NodeIDs != nil || userConfigChanged(before, user) {
 		targetNodeIDs = unionIDs(beforeNodeIDs, afterNodeIDs)
 	}
+	results := syncNodes(h.Sync, targetNodeIDs)
+	if syncErr := syncFailure(results); syncErr != nil {
+		if rollbackErr := h.restoreUser(before, beforeNodeIDs); rollbackErr != nil {
+			writeError(w, http.StatusInternalServerError, "node sync failed and user rollback failed: "+rollbackErr.Error())
+			return
+		}
+		restoreResults := syncNodes(h.Sync, targetNodeIDs)
+		if restoreErr := syncFailure(restoreResults); restoreErr != nil {
+			writeError(w, http.StatusBadGateway, "user edit was rolled back, but restoring one or more nodes failed: "+restoreErr.Error())
+			return
+		}
+		writeError(w, http.StatusBadGateway, "user edit was rolled back: "+syncErr.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, userSyncResponse{
 		User: user,
-		Sync: syncNodes(h.Sync, targetNodeIDs),
+		Sync: results,
 	})
 }
 
@@ -134,22 +149,51 @@ func (h *UserHandler) delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
+	before, err := h.Store.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
 	nodeIDs, err := h.Access.ListNodeIDs(id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := h.Store.Delete(id); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	disabled := false
+	if _, err := h.Store.UpdateWithAccess(id, model.UpdateUserReq{Enabled: &disabled}, nil); err != nil {
+		writeError(w, http.StatusInternalServerError, "prepare user deletion: "+err.Error())
 		return
 	}
-	if err := h.Access.RevokeAll(id); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	results := syncNodes(h.Sync, nodeIDs)
+	if syncErr := syncFailure(results); syncErr != nil {
+		if rollbackErr := h.restoreUser(before, nodeIDs); rollbackErr != nil {
+			writeError(w, http.StatusInternalServerError, "node sync failed and user rollback failed: "+rollbackErr.Error())
+			return
+		}
+		restoreResults := syncNodes(h.Sync, nodeIDs)
+		if restoreErr := syncFailure(restoreResults); restoreErr != nil {
+			writeError(w, http.StatusBadGateway, "user deletion was rolled back, but restoring one or more nodes failed: "+restoreErr.Error())
+			return
+		}
+		writeError(w, http.StatusBadGateway, "user deletion was rolled back: "+syncErr.Error())
+		return
+	}
+	if err := h.Store.DeleteWithRelatedData(id); err != nil {
+		if rollbackErr := h.restoreUser(before, nodeIDs); rollbackErr != nil {
+			writeError(w, http.StatusInternalServerError, "delete user failed and rollback failed: "+rollbackErr.Error())
+			return
+		}
+		restoreResults := syncNodes(h.Sync, nodeIDs)
+		if restoreErr := syncFailure(restoreResults); restoreErr != nil {
+			writeError(w, http.StatusBadGateway, "user deletion was rolled back, but restoring one or more nodes failed: "+restoreErr.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "delete user: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "deleted",
-		"sync":   syncNodes(h.Sync, nodeIDs),
+		"sync":   results,
 	})
 }
 
@@ -159,15 +203,43 @@ func (h *UserHandler) resetTraffic(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
+	before, err := h.Store.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	nodeIDs, err := h.Access.ListNodeIDs(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if err := h.Store.ResetTraffic(id); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	user, _ := h.Store.Get(id)
-	nodeIDs, _ := h.Access.ListNodeIDs(id)
+	user, err := h.Store.Get(id)
+	if err != nil {
+		h.Store.RestoreTraffic(*before)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	results := syncNodes(h.Sync, nodeIDs)
+	if syncErr := syncFailure(results); syncErr != nil {
+		if rollbackErr := h.Store.RestoreTraffic(*before); rollbackErr != nil {
+			writeError(w, http.StatusInternalServerError, "node sync failed and traffic rollback failed: "+rollbackErr.Error())
+			return
+		}
+		restoreResults := syncNodes(h.Sync, nodeIDs)
+		if restoreErr := syncFailure(restoreResults); restoreErr != nil {
+			writeError(w, http.StatusBadGateway, "traffic reset was rolled back, but restoring one or more nodes failed: "+restoreErr.Error())
+			return
+		}
+		writeError(w, http.StatusBadGateway, "traffic reset was rolled back: "+syncErr.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, userSyncResponse{
 		User: user,
-		Sync: syncNodes(h.Sync, nodeIDs),
+		Sync: results,
 	})
 }
 
@@ -181,6 +253,22 @@ func userConfigChanged(before, after *model.User) bool {
 		before.Enabled != after.Enabled ||
 		before.TrafficLimitBytes != after.TrafficLimitBytes ||
 		before.ExpireAt != after.ExpireAt
+}
+
+func (h *UserHandler) restoreUser(user *model.User, nodeIDs []int) error {
+	name := user.Name
+	enabled := user.Enabled
+	trafficLimit := user.TrafficLimitBytes
+	trafficResetDay := user.TrafficResetDay
+	expireAt := user.ExpireAt
+	_, err := h.Store.UpdateWithAccess(user.ID, model.UpdateUserReq{
+		Name:              &name,
+		Enabled:           &enabled,
+		TrafficLimitBytes: &trafficLimit,
+		TrafficResetDay:   &trafficResetDay,
+		ExpireAt:          &expireAt,
+	}, nodeIDs)
+	return err
 }
 
 func (h *UserHandler) resetSubToken(w http.ResponseWriter, r *http.Request) {

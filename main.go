@@ -33,12 +33,12 @@ func main() {
 		AdminPass: cfg.AdminPass, JWTSecret: cfg.JWTSecret,
 	}
 	meHandler := &handler.MeHandler{Users: userStore, Nodes: nodeStore, Access: accessStore}
-	nodeHandler := &handler.NodeHandler{Store: nodeStore}
 	subHandler := &handler.SubscriptionHandler{Users: userStore, Nodes: nodeStore, Access: accessStore}
 	configHandler := &handler.ConfigHandler{Users: userStore, Nodes: nodeStore, Access: accessStore, SSHKeyPath: cfg.SSHKeyPath}
 	batchHandler := &handler.BatchHandler{Nodes: nodeStore, Config: configHandler}
 	userHandler := &handler.UserHandler{Store: userStore, Access: accessStore, Sync: configHandler}
 	accessHandler := &handler.AccessHandler{Access: accessStore, Nodes: nodeStore, Sync: configHandler}
+	nodeHandler := &handler.NodeHandler{Store: nodeStore, Access: accessStore, Sync: configHandler}
 	nodeOpsHandler := &handler.NodeOpsHandler{Nodes: nodeStore, Config: configHandler}
 	setupHandler := &handler.SetupHandler{Nodes: nodeStore, Config: configHandler, Ops: nodeOpsHandler}
 	validateHandler := &handler.ValidateHandler{Config: configHandler}

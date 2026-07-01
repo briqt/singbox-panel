@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"sort"
@@ -43,7 +42,8 @@ func (h *ConfigHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && strings.HasSuffix(path, "/raw-config"):
 		h.getRawConfig(w, r)
 	case r.Method == http.MethodPut && strings.HasSuffix(path, "/raw-config"):
-		h.putRawConfig(w, r)
+		w.Header().Set("Allow", http.MethodGet)
+		writeError(w, http.StatusMethodNotAllowed, "raw config is read-only; update panel-managed settings and push instead")
 	default:
 		http.NotFound(w, r)
 	}
@@ -70,21 +70,12 @@ func (h *ConfigHandler) push(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid node id")
 		return
 	}
-	node, err := h.Nodes.Get(nodeID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "node not found")
+	results := h.SyncNodes([]int{nodeID})
+	if err := syncFailure(results); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	configBytes, err := h.generateConfig(nodeID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if err := h.pushViaSSH(node, configBytes); err != nil {
-		writeError(w, http.StatusInternalServerError, "push failed: "+err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "pushed", "node": node.Name})
+	writeJSON(w, http.StatusOK, results[0])
 }
 
 func (h *ConfigHandler) getRawConfig(w http.ResponseWriter, r *http.Request) {
@@ -112,72 +103,6 @@ func (h *ConfigHandler) getRawConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(out))
-}
-
-func (h *ConfigHandler) putRawConfig(w http.ResponseWriter, r *http.Request) {
-	nodeID := parseNodeIDFromConfigPath(r.URL.Path)
-	if nodeID == 0 {
-		writeError(w, http.StatusBadRequest, "invalid node id")
-		return
-	}
-	node, err := h.Nodes.Get(nodeID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "node not found")
-		return
-	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "read body failed")
-		return
-	}
-	if len(body) == 0 {
-		writeError(w, http.StatusBadRequest, "empty body")
-		return
-	}
-
-	client, err := h.sshConnect(node)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "ssh connect: "+err.Error())
-		return
-	}
-	defer client.Close()
-
-	tmpPath := "/tmp/singbox-panel-raw-config.json"
-	if err := sshWriteFile(client, tmpPath, body); err != nil {
-		writeError(w, http.StatusInternalServerError, "write temp: "+err.Error())
-		return
-	}
-
-	if node.ProxyType == "singbox" {
-		checkCmd := fmt.Sprintf("%s check -c %s", node.SingboxBin, tmpPath)
-		if out, err := sshRun(client, checkCmd); err != nil {
-			sshRun(client, "rm -f "+tmpPath)
-			writeError(w, http.StatusBadRequest, "config validation failed: "+strings.TrimSpace(out))
-			return
-		}
-	}
-
-	mvCmd := fmt.Sprintf("mkdir -p $(dirname %s) && cp %s %s && rm %s", node.ConfigPath, tmpPath, node.ConfigPath, tmpPath)
-	if out, err := sshRun(client, mvCmd); err != nil {
-		writeError(w, http.StatusInternalServerError, "move config: "+out)
-		return
-	}
-
-	var restart bool
-	if r.URL.Query().Get("restart") == "true" {
-		svcName := "sing-box"
-		if node.ProxyType == "xray" {
-			svcName = "xray"
-		}
-		if out, err := sshRun(client, "systemctl restart "+svcName); err != nil {
-			writeError(w, http.StatusInternalServerError, "restart failed: "+out)
-			return
-		}
-		restart = true
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "node": node.Name, "restarted": restart})
 }
 
 func (h *ConfigHandler) generateConfig(nodeID int) ([]byte, error) {
@@ -214,44 +139,42 @@ func (h *ConfigHandler) SyncNodes(nodeIDs []int) []NodeSyncResult {
 	nodeIDs = uniqueNodeIDs(nodeIDs)
 	results := make([]NodeSyncResult, 0, len(nodeIDs))
 	for _, nodeID := range nodeIDs {
-		result := NodeSyncResult{NodeID: nodeID}
-		node, err := h.Nodes.Get(nodeID)
-		if err != nil {
-			result.Status = "error"
-			result.Error = "node not found"
-			results = append(results, result)
-			continue
-		}
-		result.Node = node.Name
-		if !node.Enabled {
-			result.Status = "skipped"
-			result.Error = "node disabled"
-			results = append(results, result)
-			continue
-		}
-		if node.ProxyType != "singbox" {
-			result.Status = "skipped"
-			result.Error = "not singbox"
-			results = append(results, result)
-			continue
-		}
-		configBytes, err := h.generateConfig(nodeID)
-		if err != nil {
-			result.Status = "error"
-			result.Error = "generate: " + err.Error()
-			results = append(results, result)
-			continue
-		}
-		if err := h.pushViaSSH(node, configBytes); err != nil {
-			result.Status = "error"
-			result.Error = "push: " + err.Error()
-			results = append(results, result)
-			continue
-		}
-		result.Status = "pushed"
-		results = append(results, result)
+		results = append(results, h.syncNode(nodeID))
 	}
 	return results
+}
+
+func (h *ConfigHandler) syncNode(nodeID int) NodeSyncResult {
+	nodeLock := h.pushLock(nodeID)
+	nodeLock.Lock()
+	defer nodeLock.Unlock()
+
+	result := NodeSyncResult{NodeID: nodeID}
+	node, err := h.Nodes.Get(nodeID)
+	if err != nil {
+		result.Status = "error"
+		result.Error = "node not found"
+		return result
+	}
+	result.Node = node.Name
+	if node.ProxyType != "singbox" {
+		result.Status = "skipped"
+		result.Error = "not singbox"
+		return result
+	}
+	configBytes, err := h.generateConfig(nodeID)
+	if err != nil {
+		result.Status = "error"
+		result.Error = "generate: " + err.Error()
+		return result
+	}
+	if err := h.pushViaSSHUnlocked(node, configBytes); err != nil {
+		result.Status = "error"
+		result.Error = "push: " + err.Error()
+		return result
+	}
+	result.Status = "pushed"
+	return result
 }
 
 func uniqueNodeIDs(ids []int) []int {
@@ -466,11 +389,7 @@ func (h *ConfigHandler) sshConnect(node *model.Node) (*ssh.Client, error) {
 	return ssh.Dial("tcp", addr, config)
 }
 
-func (h *ConfigHandler) pushViaSSH(node *model.Node, configBytes []byte) error {
-	nodeLock := h.pushLock(node.ID)
-	nodeLock.Lock()
-	defer nodeLock.Unlock()
-
+func (h *ConfigHandler) pushViaSSHUnlocked(node *model.Node, configBytes []byte) error {
 	client, err := h.sshConnect(node)
 	if err != nil {
 		return err
@@ -487,15 +406,47 @@ func (h *ConfigHandler) pushViaSSH(node *model.Node, configBytes []byte) error {
 		return fmt.Errorf("config check failed: %s: %w", out, err)
 	}
 
-	mvCmd := fmt.Sprintf("mkdir -p $(dirname %s) && cp %s %s && rm %s", node.ConfigPath, tmpPath, node.ConfigPath, tmpPath)
-	if out, err := sshRun(client, mvCmd); err != nil {
-		return fmt.Errorf("move config: %s: %w", out, err)
-	}
-
-	if out, err := sshRun(client, "systemctl restart sing-box"); err != nil {
-		return fmt.Errorf("restart sing-box: %s: %w", out, err)
+	deployCmd := buildAtomicDeployCommand(node.ConfigPath, tmpPath)
+	if out, err := sshRun(client, deployCmd); err != nil {
+		return fmt.Errorf("deploy config (previous config restored when available): %s: %w", out, err)
 	}
 	return nil
+}
+
+func buildAtomicDeployCommand(configPath, tmpPath string) string {
+	backupPath := tmpPath + ".backup"
+	return fmt.Sprintf(`set -e
+mkdir -p $(dirname %s)
+had_previous=0
+if [ -f %s ]; then
+  cp %s %s
+  had_previous=1
+fi
+cp %s %s
+rm -f %s
+if systemctl restart sing-box; then
+  rm -f %s
+else
+  restart_status=$?
+  if [ "$had_previous" = 1 ]; then
+    cp %s %s
+  else
+    rm -f %s
+  fi
+  systemctl restart sing-box >/dev/null 2>&1 || true
+  rm -f %s
+  exit "$restart_status"
+fi`,
+		configPath,
+		configPath,
+		configPath, backupPath,
+		tmpPath, configPath,
+		tmpPath,
+		backupPath,
+		backupPath, configPath,
+		configPath,
+		backupPath,
+	)
 }
 
 func (h *ConfigHandler) pushLock(nodeID int) *sync.Mutex {

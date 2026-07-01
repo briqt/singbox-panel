@@ -19,6 +19,10 @@ func (h *ValidateHandler) HandleDNSCheck(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "domain parameter required")
 		return
 	}
+	if !validDomainName(domain) {
+		writeError(w, http.StatusBadRequest, "invalid domain")
+		return
+	}
 
 	ips, err := net.LookupHost(domain)
 	if err != nil {
@@ -80,6 +84,10 @@ func (h *ValidateHandler) HandleCertInstall(w http.ResponseWriter, r *http.Reque
 	}
 	if domain == "" {
 		writeError(w, http.StatusBadRequest, "node has no domain set; pass ?domain=xxx or update node domain first")
+		return
+	}
+	if !validDomainName(domain) {
+		writeError(w, http.StatusBadRequest, "invalid domain")
 		return
 	}
 
@@ -195,6 +203,10 @@ func (h *ValidateHandler) HandleCertUpload(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "domain, cert, and key are required")
 		return
 	}
+	if !validDomainName(req.Domain) {
+		writeError(w, http.StatusBadRequest, "invalid domain")
+		return
+	}
 
 	client, err := h.Config.sshConnect(node)
 	if err != nil {
@@ -229,4 +241,28 @@ func (h *ValidateHandler) HandleCertUpload(w http.ResponseWriter, r *http.Reques
 
 func parseJSON(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+func validDomainName(domain string) bool {
+	if len(domain) == 0 || len(domain) > 253 || strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		return false
+	}
+	labels := strings.Split(domain, ".")
+	if len(labels) < 2 {
+		return false
+	}
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, char := range label {
+			if (char < 'a' || char > 'z') &&
+				(char < 'A' || char > 'Z') &&
+				(char < '0' || char > '9') &&
+				char != '-' {
+				return false
+			}
+		}
+	}
+	return true
 }

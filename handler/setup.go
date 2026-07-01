@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -54,13 +55,24 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "node not found")
 		return
 	}
+	if node.ProxyType != "singbox" {
+		writeError(w, http.StatusBadRequest, "auto-setup is only supported for singbox nodes")
+		return
+	}
 
 	var req AutoSetupReq
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
 
 	domain := req.Domain
 	if domain == "" {
 		domain = node.Domain
+	}
+	if domain != "" && !validDomainName(domain) {
+		writeError(w, http.StatusBadRequest, "invalid domain")
+		return
 	}
 
 	// Default protocols based on domain + DNS conditions
@@ -77,10 +89,32 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 			req.Protocols = []string{"vless-reality"}
 		}
 	}
-
-	// Update node domain if provided
-	if req.Domain != "" && req.Domain != node.Domain {
-		h.Nodes.DB.Exec(`UPDATE nodes SET domain = ? WHERE id = ?`, req.Domain, node.ID)
+	seenProtocols := make(map[string]bool, len(req.Protocols))
+	for _, protocol := range req.Protocols {
+		if seenProtocols[protocol] {
+			writeError(w, http.StatusBadRequest, "duplicate protocol: "+protocol)
+			return
+		}
+		seenProtocols[protocol] = true
+		switch protocol {
+		case "hysteria2", "vless-httpupgrade":
+			if domain == "" {
+				writeError(w, http.StatusBadRequest, protocol+" requires a domain")
+				return
+			}
+		case "vless-reality":
+		default:
+			writeError(w, http.StatusBadRequest, "unsupported protocol: "+protocol)
+			return
+		}
+	}
+	for protocol, port := range map[string]int{
+		"hysteria2": req.Ports.Hysteria2, "vless-reality": req.Ports.Reality, "vless-httpupgrade": req.Ports.HTTPUpgrade,
+	} {
+		if port < 0 || port > 65535 {
+			writeError(w, http.StatusBadRequest, "invalid port for "+protocol)
+			return
+		}
 	}
 
 	// Connect to node
@@ -99,27 +133,79 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	var results []inboundResult
 
-	// Check existing inbounds to avoid duplicates
-	existingInbounds, _ := h.Nodes.ListInbounds(node.ID)
-	existingProtos := map[string]bool{}
+	// Existing protocols are updated in place when their domain or requested
+	// port changes. Reality credentials remain stable unless the inbound is
+	// explicitly deleted first.
+	existingInbounds, err := h.Nodes.ListInbounds(node.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	existingProtos := map[string]model.NodeInbound{}
 	for _, ib := range existingInbounds {
-		existingProtos[ib.Protocol] = true
+		existingProtos[ib.Protocol] = ib
+	}
+	if domain != node.Domain {
+		selected := make(map[string]bool, len(req.Protocols))
+		for _, protocol := range req.Protocols {
+			selected[protocol] = true
+		}
+		for _, inbound := range existingInbounds {
+			if (inbound.Protocol == "hysteria2" || inbound.Protocol == "vless-httpupgrade") && !selected[inbound.Protocol] {
+				writeError(w, http.StatusConflict, "domain migration must include every existing domain-bound protocol")
+				return
+			}
+		}
 	}
 
-	for _, proto := range req.Protocols {
-		if existingProtos[proto] {
-			results = append(results, inboundResult{Protocol: proto, Status: "skipped", Details: "already configured"})
-			continue
+	var createdInboundIDs []int
+	var updatedInbounds []model.NodeInbound
+	rollbackDatabase := func() error {
+		var rollbackErrors []error
+		for _, inboundID := range createdInboundIDs {
+			if err := h.Nodes.DeleteInbound(inboundID); err != nil {
+				rollbackErrors = append(rollbackErrors, fmt.Errorf("remove inbound %d: %w", inboundID, err))
+			}
 		}
+		for _, inbound := range updatedInbounds {
+			if _, err := h.Nodes.UpdateInbound(inbound.ID, model.CreateInboundReq{
+				Tag: inbound.Tag, Protocol: inbound.Protocol, Port: inbound.Port, Settings: inbound.Settings,
+			}); err != nil {
+				rollbackErrors = append(rollbackErrors, fmt.Errorf("restore inbound %d: %w", inbound.ID, err))
+			}
+		}
+		if domain != node.Domain {
+			oldDomain := node.Domain
+			if _, err := h.Nodes.Update(node.ID, model.UpdateNodeReq{Domain: &oldDomain}); err != nil {
+				rollbackErrors = append(rollbackErrors, fmt.Errorf("restore node domain: %w", err))
+			}
+		}
+		return errors.Join(rollbackErrors...)
+	}
+
+	hadError := false
+	for _, proto := range req.Protocols {
+		existing, exists := existingProtos[proto]
 		switch proto {
 		case "hysteria2":
 			if domain == "" {
-				results = append(results, inboundResult{Protocol: proto, Status: "skipped", Details: "no domain available"})
+				results = append(results, inboundResult{Protocol: proto, Status: "error", Details: "domain is required"})
+				hadError = true
 				continue
+			}
+			var oldSettings map[string]any
+			if exists {
+				json.Unmarshal(existing.Settings, &oldSettings)
+				oldDomain, _ := oldSettings["domain"].(string)
+				if oldDomain == domain && (req.Ports.Hysteria2 == 0 || req.Ports.Hysteria2 == existing.Port) {
+					results = append(results, inboundResult{Protocol: proto, Port: existing.Port, Status: "skipped", Details: "already configured"})
+					continue
+				}
 			}
 			ips, dnsErr := net.LookupHost(domain)
 			if dnsErr != nil {
 				results = append(results, inboundResult{Protocol: proto, Status: "error", Details: "DNS lookup failed: " + dnsErr.Error()})
+				hadError = true
 				continue
 			}
 			dnsOK := false
@@ -130,11 +216,16 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 			}
 			if !dnsOK {
 				results = append(results, inboundResult{Protocol: proto, Status: "error", Details: fmt.Sprintf("DNS: %s → %v, expected %s", domain, ips, node.Host)})
+				hadError = true
 				continue
 			}
 			port := req.Ports.Hysteria2
 			if port == 0 {
-				port = randomPort()
+				if exists {
+					port = existing.Port
+				} else {
+					port = randomPort()
+				}
 			}
 			certPath := fmt.Sprintf("/etc/sing-box/tls/%s.crt", domain)
 			keyPath := fmt.Sprintf("/etc/sing-box/tls/%s.key", domain)
@@ -170,13 +261,36 @@ test -f %s && test -f %s && echo "CERT_OK"
 			certOut, _ := sshRun(client, certScript)
 			if certOut == "" || (!contains(certOut, "CERT_OK") && !contains(certOut, "CERT_EXISTS")) {
 				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: "cert install failed"})
+				hadError = true
 				continue
 			}
 			settings := mustMarshal(map[string]any{"domain": domain, "cert_path": certPath, "key_path": keyPath})
-			h.Nodes.CreateInbound(node.ID, model.CreateInboundReq{Tag: "hysteria2", Protocol: "hysteria2", Port: port, Settings: settings})
-			results = append(results, inboundResult{Protocol: proto, Port: port, Status: "ok"})
+			inboundReq := model.CreateInboundReq{Tag: "hysteria2", Protocol: "hysteria2", Port: port, Settings: settings}
+			status := "ok"
+			if exists {
+				updatedInbounds = append(updatedInbounds, existing)
+				if _, err := h.Nodes.UpdateInbound(existing.ID, inboundReq); err != nil {
+					results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: err.Error()})
+					hadError = true
+					continue
+				}
+				status = "updated"
+			} else {
+				inbound, err := h.Nodes.CreateInbound(node.ID, inboundReq)
+				if err != nil {
+					results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: err.Error()})
+					hadError = true
+					continue
+				}
+				createdInboundIDs = append(createdInboundIDs, inbound.ID)
+			}
+			results = append(results, inboundResult{Protocol: proto, Port: port, Status: status})
 
 		case "vless-reality":
+			if exists {
+				results = append(results, inboundResult{Protocol: proto, Port: existing.Port, Status: "skipped", Details: "already configured"})
+				continue
+			}
 			port := req.Ports.Reality
 			if port == 0 {
 				port = randomPort()
@@ -184,9 +298,15 @@ test -f %s && test -f %s && echo "CERT_OK"
 			keypairOut, err := sshRun(client, node.SingboxBin+" generate reality-keypair")
 			if err != nil {
 				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: "keypair generation failed"})
+				hadError = true
 				continue
 			}
 			privateKey, publicKey := parseKeypair(keypairOut)
+			if privateKey == "" || publicKey == "" {
+				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: "keypair output was invalid"})
+				hadError = true
+				continue
+			}
 			shortIDOut, _ := sshRun(client, node.SingboxBin+" generate rand 8 --hex")
 			shortID := trimOutput(shortIDOut)
 			if shortID == "" {
@@ -199,19 +319,45 @@ test -f %s && test -f %s && echo "CERT_OK"
 				"short_id": shortID, "handshake_server": sni, "handshake_port": 443,
 				"fingerprint": "chrome",
 			})
-			h.Nodes.CreateInbound(node.ID, model.CreateInboundReq{Tag: "vless-reality", Protocol: "vless-reality", Port: port, Settings: settings})
+			inbound, err := h.Nodes.CreateInbound(node.ID, model.CreateInboundReq{Tag: "vless-reality", Protocol: "vless-reality", Port: port, Settings: settings})
+			if err != nil {
+				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: err.Error()})
+				hadError = true
+				continue
+			}
+			createdInboundIDs = append(createdInboundIDs, inbound.ID)
 			results = append(results, inboundResult{Protocol: proto, Port: port, Status: "ok", Details: map[string]string{"public_key": publicKey, "short_id": shortID}})
 
 		case "vless-httpupgrade":
 			if domain == "" {
-				results = append(results, inboundResult{Protocol: proto, Status: "skipped", Details: "no domain available"})
+				results = append(results, inboundResult{Protocol: proto, Status: "error", Details: "domain is required"})
+				hadError = true
 				continue
+			}
+			var oldSettings map[string]any
+			if exists {
+				json.Unmarshal(existing.Settings, &oldSettings)
+				oldDomain, _ := oldSettings["domain"].(string)
+				if oldDomain == domain && (req.Ports.HTTPUpgrade == 0 || req.Ports.HTTPUpgrade == existing.Port) {
+					results = append(results, inboundResult{Protocol: proto, Port: existing.Port, Status: "skipped", Details: "already configured"})
+					continue
+				}
 			}
 			port := req.Ports.HTTPUpgrade
 			if port == 0 {
-				port = 443
+				if exists {
+					port = existing.Port
+				} else {
+					port = 443
+				}
 			}
-			path := "/" + randomHex(8)
+			path := ""
+			if exists {
+				path, _ = oldSettings["path"].(string)
+			}
+			if path == "" {
+				path = "/" + randomHex(8)
+			}
 
 			// HTTPUpgrade behind CF requires Origin Certificate (cert_path + key_path)
 			// Check if cert files already exist on node, or if provided in request
@@ -220,27 +366,85 @@ test -f %s && test -f %s && echo "CERT_OK"
 			certCheck, _ := sshRun(client, fmt.Sprintf("test -f %s && test -f %s && echo OK", certPath, keyPath))
 			if !contains(certCheck, "OK") {
 				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: "CF Origin Certificate required: upload cert/key via node settings first"})
+				hadError = true
 				continue
 			}
 
 			settings := map[string]any{"domain": domain, "path": path, "cert_path": certPath, "key_path": keyPath}
-			h.Nodes.CreateInbound(node.ID, model.CreateInboundReq{Tag: "vless-httpupgrade", Protocol: "vless-httpupgrade", Port: port, Settings: mustMarshal(settings)})
-			results = append(results, inboundResult{Protocol: proto, Port: port, Status: "ok", Details: map[string]string{"path": path}})
+			inboundReq := model.CreateInboundReq{Tag: "vless-httpupgrade", Protocol: "vless-httpupgrade", Port: port, Settings: mustMarshal(settings)}
+			status := "ok"
+			if exists {
+				updatedInbounds = append(updatedInbounds, existing)
+				if _, err := h.Nodes.UpdateInbound(existing.ID, inboundReq); err != nil {
+					results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: err.Error()})
+					hadError = true
+					continue
+				}
+				status = "updated"
+			} else {
+				inbound, err := h.Nodes.CreateInbound(node.ID, inboundReq)
+				if err != nil {
+					results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: err.Error()})
+					hadError = true
+					continue
+				}
+				createdInboundIDs = append(createdInboundIDs, inbound.ID)
+			}
+			results = append(results, inboundResult{Protocol: proto, Port: port, Status: status, Details: map[string]string{"path": path}})
+		default:
+			results = append(results, inboundResult{Protocol: proto, Status: "error", Details: "unsupported protocol"})
+			hadError = true
 		}
 	}
 
-	// Push config
-	configBytes, err := h.Config.generateConfig(node.ID)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"inbounds": results, "push": "error: " + err.Error()})
-		return
-	}
-	if err := h.Config.pushViaSSH(node, configBytes); err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"inbounds": results, "push": "error: " + err.Error()})
+	if hadError {
+		if rollbackErr := rollbackDatabase(); rollbackErr != nil {
+			writeError(w, http.StatusInternalServerError, "auto-setup failed and database rollback failed: "+rollbackErr.Error())
+			return
+		}
+		var failureDetails []string
+		for _, result := range results {
+			if result.Status == "error" {
+				failureDetails = append(failureDetails, result.Protocol+": "+fmt.Sprint(result.Details))
+			}
+		}
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error":    "auto-setup failed; no changes were applied: " + strings.Join(failureDetails, "; "),
+			"inbounds": results,
+			"push":     "not attempted",
+		})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"inbounds": results, "push": "ok", "node": node.Name})
+	if domain != node.Domain {
+		if _, err := h.Nodes.Update(node.ID, model.UpdateNodeReq{Domain: &domain}); err != nil {
+			if rollbackErr := rollbackDatabase(); rollbackErr != nil {
+				writeError(w, http.StatusInternalServerError, "update node domain failed and rollback failed: "+rollbackErr.Error())
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "update node domain: "+err.Error())
+			return
+		}
+	}
+
+	// Generate and push under the node lock so concurrent panel operations
+	// cannot publish a configuration snapshot created before a newer change.
+	syncResults := h.Config.SyncNodes([]int{node.ID})
+	if syncErr := syncFailure(syncResults); syncErr != nil {
+		if rollbackErr := rollbackDatabase(); rollbackErr != nil {
+			writeError(w, http.StatusInternalServerError, "push failed and database rollback failed: "+rollbackErr.Error())
+			return
+		}
+		restoreResults := h.Config.SyncNodes([]int{node.ID})
+		if restoreErr := syncFailure(restoreResults); restoreErr != nil {
+			writeError(w, http.StatusBadGateway, "changes rolled back, but restoring the previous node config failed: "+restoreErr.Error())
+			return
+		}
+		writeError(w, http.StatusBadGateway, "push failed; changes rolled back: "+syncErr.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"inbounds": results, "push": "ok", "sync": syncResults, "node": node.Name})
 }
 
 func randomPort() int {

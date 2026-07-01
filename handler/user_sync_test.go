@@ -15,6 +15,7 @@ import (
 
 type fakeNodeSynchronizer struct {
 	calls [][]int
+	fail  bool
 }
 
 func (s *fakeNodeSynchronizer) SyncNodes(nodeIDs []int) []NodeSyncResult {
@@ -22,7 +23,12 @@ func (s *fakeNodeSynchronizer) SyncNodes(nodeIDs []int) []NodeSyncResult {
 	s.calls = append(s.calls, copied)
 	results := make([]NodeSyncResult, 0, len(nodeIDs))
 	for _, nodeID := range nodeIDs {
-		results = append(results, NodeSyncResult{NodeID: nodeID, Node: "test", Status: "pushed"})
+		result := NodeSyncResult{NodeID: nodeID, Node: "test", Status: "pushed"}
+		if s.fail {
+			result.Status = "error"
+			result.Error = "test sync failure"
+		}
+		results = append(results, result)
 	}
 	return results
 }
@@ -181,5 +187,112 @@ func TestCombinedUserEditIsAtomicWhenNodeIsInvalid(t *testing.T) {
 	}
 	if len(env.syncer.calls) != 0 {
 		t.Fatalf("invalid edit must not sync: %#v", env.syncer.calls)
+	}
+}
+
+func TestCombinedUserEditRollsBackWhenNodeSyncFails(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	node := env.createNode(t, "node-1")
+	user, err := env.users.CreateWithPassword("new-user", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.syncer.fail = true
+	userHandler := &UserHandler{Store: env.users, Access: env.access, Sync: env.syncer}
+
+	rec := performJSONRequest(t, http.HandlerFunc(userHandler.ServeHTTP), http.MethodPut, "/api/users/"+strconv.Itoa(user.ID), map[string]any{
+		"enabled":  true,
+		"node_ids": []int{node.ID},
+	})
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	unchanged, _ := env.users.Get(user.ID)
+	if unchanged.Enabled {
+		t.Fatal("failed synchronization left user enabled")
+	}
+	accessIDs, _ := env.access.ListNodeIDs(user.ID)
+	if len(accessIDs) != 0 {
+		t.Fatalf("failed synchronization left access behind: %#v", accessIDs)
+	}
+	if !reflect.DeepEqual(env.syncer.calls, [][]int{{node.ID}, {node.ID}}) {
+		t.Fatalf("expected change and rollback sync attempts, got %#v", env.syncer.calls)
+	}
+}
+
+func TestStandaloneAccessRollsBackWhenNodeSyncFails(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	node := env.createNode(t, "node-1")
+	user, err := env.users.CreateWithPassword("new-user", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.syncer.fail = true
+	accessHandler := &AccessHandler{Access: env.access, Nodes: env.nodes, Sync: env.syncer}
+
+	rec := performJSONRequest(t, http.HandlerFunc(accessHandler.ServeHTTP), http.MethodPost, "/api/users/"+strconv.Itoa(user.ID)+"/access", map[string]any{
+		"node_id": node.ID,
+	})
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	accessIDs, _ := env.access.ListNodeIDs(user.ID)
+	if len(accessIDs) != 0 {
+		t.Fatalf("failed synchronization left access behind: %#v", accessIDs)
+	}
+}
+
+func TestDeleteUserRollsBackWhenNodeSyncFails(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	node := env.createNode(t, "node-1")
+	user, err := env.users.CreateWithPassword("new-user", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := true
+	if _, err := env.users.UpdateWithAccess(user.ID, model.UpdateUserReq{Enabled: &enabled}, []int{node.ID}); err != nil {
+		t.Fatal(err)
+	}
+	env.syncer.fail = true
+	userHandler := &UserHandler{Store: env.users, Access: env.access, Sync: env.syncer}
+
+	rec := performJSONRequest(t, http.HandlerFunc(userHandler.ServeHTTP), http.MethodDelete, "/api/users/"+strconv.Itoa(user.ID), nil)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	restored, err := env.users.Get(user.ID)
+	if err != nil || !restored.Enabled {
+		t.Fatalf("user was not restored: user=%#v err=%v", restored, err)
+	}
+	accessIDs, _ := env.access.ListNodeIDs(user.ID)
+	if !reflect.DeepEqual(accessIDs, []int{node.ID}) {
+		t.Fatalf("user access was not restored: %#v", accessIDs)
+	}
+}
+
+func TestResetTrafficRollsBackWhenNodeSyncFails(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	node := env.createNode(t, "node-1")
+	user, err := env.users.CreateWithPassword("new-user", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.access.Grant(user.ID, node.ID); err != nil {
+		t.Fatal(err)
+	}
+	env.users.AddTraffic(user.ID, 100, 200)
+	before, _ := env.users.Get(user.ID)
+	env.syncer.fail = true
+	userHandler := &UserHandler{Store: env.users, Access: env.access, Sync: env.syncer}
+
+	rec := performJSONRequest(t, http.HandlerFunc(userHandler.ServeHTTP), http.MethodPost, "/api/users/"+strconv.Itoa(user.ID)+"/reset-traffic", nil)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	restored, _ := env.users.Get(user.ID)
+	if restored.TrafficUsedBytes != before.TrafficUsedBytes ||
+		restored.TrafficUpBytes != before.TrafficUpBytes ||
+		restored.TrafficDownBytes != before.TrafficDownBytes {
+		t.Fatalf("traffic was not restored: before=%#v after=%#v", before, restored)
 	}
 }

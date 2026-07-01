@@ -105,6 +105,12 @@ func (s *AccessStore) UsersForNode(nodeID int) ([]int, error) {
 	return ids, rows.Err()
 }
 
+func (s *AccessStore) CountForNode(nodeID int) (int, error) {
+	var count int
+	err := s.DB.QueryRow(`SELECT COUNT(*) FROM user_access WHERE node_id = ?`, nodeID).Scan(&count)
+	return count, err
+}
+
 func (s *AccessStore) validateUser(userID int) error {
 	var exists int
 	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE id = ?`, userID).Scan(&exists); err != nil {

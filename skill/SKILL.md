@@ -85,9 +85,8 @@ GET /api/validate/dns?domain=x.briqt.dev&ip=1.2.3.4
 # 手动签证书
 POST /api/nodes/{id}/cert?domain=x.briqt.dev
 
-# 查看/编辑原始配置
+# 查看原始配置（只读）
 GET /api/nodes/{id}/raw-config
-PUT /api/nodes/{id}/raw-config?restart=true  (body=完整JSON)
 
 # 流量统计
 GET /api/stats/users
@@ -102,37 +101,36 @@ POST /api/users/{id}/reset-traffic
 ### 用户
 - `GET /api/users` — 列表
 - `POST /api/users` — 创建
-- `PUT /api/users/{id}` — 更新 (name/enabled/traffic_limit_bytes/expire_at/node_ids)，用户与权限合并保存并同步受影响节点
-- `DELETE /api/users/{id}` — 删除
-- `POST /api/users/{id}/reset-traffic` — 重置流量
+- `PUT /api/users/{id}` — 更新 (name/enabled/traffic_limit_bytes/expire_at/node_ids)，用户与权限合并保存并同步受影响节点；同步失败自动回滚
+- `DELETE /api/users/{id}` — 先从节点移除用户，节点同步成功后删除；失败自动回滚
+- `POST /api/users/{id}/reset-traffic` — 重置流量并同步节点；失败自动回滚
 - `POST /api/users/{id}/reset-sub-token` — 重置订阅令牌
 
 ### 访问控制
 - `GET /api/users/{id}/access` — 查看可访问节点
-- `POST /api/users/{id}/access` — 授权 ({node_id} 或 {all:true})，自动同步节点
-- `PUT /api/users/{id}/access` — 原子替换权限 ({node_ids:[1,2]})，自动同步节点
-- `DELETE /api/users/{id}/access` — 撤销 ({node_id} 或 {all:true})，自动同步节点
+- `POST /api/users/{id}/access` — 授权 ({node_id} 或 {all:true})，自动同步节点，失败回滚
+- `PUT /api/users/{id}/access` — 原子替换权限 ({node_ids:[1,2]})，自动同步节点，失败回滚
+- `DELETE /api/users/{id}/access` — 撤销 ({node_id} 或 {all:true})，自动同步节点，失败回滚
 
 ### 节点
 - `GET /api/nodes` / `POST /api/nodes` / `PUT /api/nodes/{id}` / `DELETE /api/nodes/{id}`
 - `GET /api/nodes/{id}` — 详情含 inbounds
-- `POST /api/nodes/{id}/inbounds` — 手动添加协议
-- `DELETE /api/inbounds/{id}` — 删除协议
+- `POST /api/nodes/{id}/inbounds` — 添加协议并立即同步节点，失败回滚
+- `DELETE /api/inbounds/{id}` — 删除协议并立即同步节点，失败回滚
 
 ### 节点运维
 - `GET /api/nodes/{id}/status` — SSH 连通性 + sing-box 状态
 - `GET /api/nodes/{id}/version` — sing-box 版本
 - `POST /api/nodes/{id}/setup-ssh` — 注入公钥 ({password})
 - `POST /api/nodes/{id}/install` — 安装/升级 sing-box ({version})
-- `POST /api/nodes/{id}/auto-setup` — 一键配置 ({domain, protocols, ports})
+- `POST /api/nodes/{id}/auto-setup` — 幂等配置和域名迁移 ({domain, protocols, ports})；存在域名协议时禁止直接修改节点域名
 - `POST /api/nodes/{id}/cert` — 签发证书 (?domain=)
 
 ### 配置
 - `POST /api/nodes/{id}/generate` — 预览配置
 - `POST /api/nodes/{id}/push` — 推送并重启
 - `POST /api/batch/push-all` — 推送所有节点
-- `GET /api/nodes/{id}/raw-config` — 读取原始配置
-- `PUT /api/nodes/{id}/raw-config?restart=true` — 写入原始配置
+- `GET /api/nodes/{id}/raw-config` — 只读查看已部署配置；不支持手动写入
 
 ### 校验
 - `GET /api/validate/dns?domain=X&ip=Y` — DNS 解析校验
