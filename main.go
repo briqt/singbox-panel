@@ -37,8 +37,8 @@ func main() {
 	subHandler := &handler.SubscriptionHandler{Users: userStore, Nodes: nodeStore, Access: accessStore}
 	configHandler := &handler.ConfigHandler{Users: userStore, Nodes: nodeStore, Access: accessStore, SSHKeyPath: cfg.SSHKeyPath}
 	batchHandler := &handler.BatchHandler{Nodes: nodeStore, Config: configHandler}
-	userHandler := &handler.UserHandler{Store: userStore, Nodes: nodeStore, Batch: batchHandler}
-	accessHandler := &handler.AccessHandler{Access: accessStore, Nodes: nodeStore}
+	userHandler := &handler.UserHandler{Store: userStore, Access: accessStore, Sync: configHandler}
+	accessHandler := &handler.AccessHandler{Access: accessStore, Nodes: nodeStore, Sync: configHandler}
 	nodeOpsHandler := &handler.NodeOpsHandler{Nodes: nodeStore, Config: configHandler}
 	setupHandler := &handler.SetupHandler{Nodes: nodeStore, Config: configHandler, Ops: nodeOpsHandler}
 	validateHandler := &handler.ValidateHandler{Config: configHandler}

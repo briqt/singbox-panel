@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +30,10 @@ type User struct {
 
 type UserStore struct {
 	DB *sql.DB
+}
+
+type userUpdateExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
 }
 
 func (s *UserStore) List() ([]User, error) {
@@ -130,27 +135,87 @@ type UpdateUserReq struct {
 }
 
 func (s *UserStore) Update(id int, req UpdateUserReq) (*User, error) {
+	if err := applyUserUpdate(s.DB, id, req); err != nil {
+		return nil, err
+	}
+	return s.Get(id)
+}
+
+// UpdateWithAccess updates user properties and node assignments in one
+// transaction, preventing a partially saved edit.
+func (s *UserStore) UpdateWithAccess(id int, req UpdateUserReq, nodeIDs []int) (*User, error) {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var exists int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM users WHERE id = ?`, id).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if exists == 0 {
+		return nil, sql.ErrNoRows
+	}
+
+	nodeIDs = uniqueSortedIDs(nodeIDs)
+	for _, nodeID := range nodeIDs {
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, nodeID).Scan(&exists); err != nil {
+			return nil, err
+		}
+		if exists == 0 {
+			return nil, fmt.Errorf("node %d not found", nodeID)
+		}
+	}
+	if err := applyUserUpdate(tx, id, req); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`DELETE FROM user_access WHERE user_id = ?`, id); err != nil {
+		return nil, err
+	}
+	for _, nodeID := range nodeIDs {
+		if _, err := tx.Exec(`INSERT INTO user_access (user_id, node_id) VALUES (?, ?)`, id, nodeID); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return s.Get(id)
+}
+
+func applyUserUpdate(exec userUpdateExecer, id int, req UpdateUserReq) error {
 	now := time.Now().UTC().Format(time.DateTime)
 	if req.Name != nil {
-		s.DB.Exec(`UPDATE users SET name = ?, updated_at = ? WHERE id = ?`, *req.Name, now, id)
+		if _, err := exec.Exec(`UPDATE users SET name = ?, updated_at = ? WHERE id = ?`, *req.Name, now, id); err != nil {
+			return err
+		}
 	}
 	if req.Enabled != nil {
 		enabled := 0
 		if *req.Enabled {
 			enabled = 1
 		}
-		s.DB.Exec(`UPDATE users SET enabled = ?, updated_at = ? WHERE id = ?`, enabled, now, id)
+		if _, err := exec.Exec(`UPDATE users SET enabled = ?, updated_at = ? WHERE id = ?`, enabled, now, id); err != nil {
+			return err
+		}
 	}
 	if req.TrafficLimitBytes != nil {
-		s.DB.Exec(`UPDATE users SET traffic_limit_bytes = ?, updated_at = ? WHERE id = ?`, *req.TrafficLimitBytes, now, id)
+		if _, err := exec.Exec(`UPDATE users SET traffic_limit_bytes = ?, updated_at = ? WHERE id = ?`, *req.TrafficLimitBytes, now, id); err != nil {
+			return err
+		}
 	}
 	if req.TrafficResetDay != nil {
-		s.DB.Exec(`UPDATE users SET traffic_reset_day = ?, updated_at = ? WHERE id = ?`, *req.TrafficResetDay, now, id)
+		if _, err := exec.Exec(`UPDATE users SET traffic_reset_day = ?, updated_at = ? WHERE id = ?`, *req.TrafficResetDay, now, id); err != nil {
+			return err
+		}
 	}
 	if req.ExpireAt != nil {
-		s.DB.Exec(`UPDATE users SET expire_at = ?, updated_at = ? WHERE id = ?`, *req.ExpireAt, now, id)
+		if _, err := exec.Exec(`UPDATE users SET expire_at = ?, updated_at = ? WHERE id = ?`, *req.ExpireAt, now, id); err != nil {
+			return err
+		}
 	}
-	return s.Get(id)
+	return nil
 }
 
 func (s *UserStore) Delete(id int) error {
@@ -181,8 +246,9 @@ func (s *UserStore) AddTraffic(userID int, up, down int64) {
 	s.DB.Exec(`UPDATE users SET traffic_used_bytes = traffic_used_bytes + ?, traffic_up_bytes = traffic_up_bytes + ?, traffic_down_bytes = traffic_down_bytes + ?, updated_at = datetime('now') WHERE id = ?`, up+down, up, down, userID)
 }
 
-func (s *UserStore) ResetTraffic(userID int) {
-	s.DB.Exec(`UPDATE users SET traffic_used_bytes = 0, traffic_up_bytes = 0, traffic_down_bytes = 0, updated_at = datetime('now') WHERE id = ?`, userID)
+func (s *UserStore) ResetTraffic(userID int) error {
+	_, err := s.DB.Exec(`UPDATE users SET traffic_used_bytes = 0, traffic_up_bytes = 0, traffic_down_bytes = 0, updated_at = datetime('now') WHERE id = ?`, userID)
+	return err
 }
 
 func (s *UserStore) ResetSubToken(userID int) (string, error) {
