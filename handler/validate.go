@@ -113,27 +113,7 @@ func (h *ValidateHandler) HandleCertInstall(w http.ResponseWriter, r *http.Reque
 	certPath := certDir + "/" + domain + ".crt"
 	keyPath := certDir + "/" + domain + ".key"
 
-	installScript := fmt.Sprintf(`
-set -e
-mkdir -p %s
-
-# Install acme.sh if missing
-if ! command -v /root/.acme.sh/acme.sh &>/dev/null; then
-  curl -sL https://get.acme.sh | sh -s email=admin@%s 2>&1
-fi
-
-# Issue cert using standalone mode (needs port 80 free briefly)
-/root/.acme.sh/acme.sh --issue -d %s --standalone --keylength ec-256 --force 2>&1 || true
-
-# Install cert to target dir
-/root/.acme.sh/acme.sh --install-cert -d %s --ecc \
-  --fullchain-file %s \
-  --key-file %s \
-  --reloadcmd "systemctl restart sing-box 2>/dev/null || true" 2>&1
-
-# Verify files exist
-test -f %s && test -f %s && echo "CERT_OK"
-`, certDir, domain, domain, domain, certPath, keyPath, certPath, keyPath)
+	installScript := buildCertInstallScript(certDir, domain, certPath, keyPath)
 
 	out, err := sshRun(client, installScript)
 	if err != nil || !strings.Contains(out, "CERT_OK") {
@@ -149,6 +129,34 @@ test -f %s && test -f %s && echo "CERT_OK"
 		"key_path":  keyPath,
 		"message":   "Certificate installed. Use these paths in inbound settings.",
 	})
+}
+
+func buildCertInstallScript(certDir, domain, certPath, keyPath string) string {
+	return fmt.Sprintf(`
+set -e
+mkdir -p %s
+
+# Install acme.sh if missing
+if ! command -v /root/.acme.sh/acme.sh &>/dev/null; then
+  curl -sL https://get.acme.sh | sh -s email=admin@%s 2>&1
+fi
+
+# acme.sh defaults to ZeroSSL, which requires EAB registration. Keep certificate
+# behavior consistent with auto-setup and use Let's Encrypt explicitly.
+/root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+
+# Issue cert using standalone mode (needs port 80 free briefly)
+/root/.acme.sh/acme.sh --issue -d %s --standalone --keylength ec-256 --force
+
+# Install cert to target dir
+/root/.acme.sh/acme.sh --install-cert -d %s --ecc \
+  --fullchain-file %s \
+  --key-file %s \
+  --reloadcmd "systemctl restart sing-box 2>/dev/null || true" 2>&1
+
+# Verify files exist
+test -f %s && test -f %s && echo "CERT_OK"
+`, certDir, domain, domain, domain, certPath, keyPath, certPath, keyPath)
 }
 
 type UploadCertReq struct {
