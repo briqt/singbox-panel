@@ -23,31 +23,11 @@ func (h *BatchHandler) PushAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type result struct {
-		Node   string `json:"node"`
-		Status string `json:"status"`
-		Error  string `json:"error,omitempty"`
-	}
-	var results []result
-
+	nodeIDs := make([]int, 0, len(nodes))
 	for _, node := range nodes {
-		if node.ProxyType != "singbox" {
-			results = append(results, result{Node: node.Name, Status: "skipped", Error: "not singbox"})
-			continue
-		}
-		configBytes, err := h.Config.generateConfig(node.ID)
-		if err != nil {
-			results = append(results, result{Node: node.Name, Status: "error", Error: err.Error()})
-			continue
-		}
-		if err := h.Config.pushViaSSH(&node, configBytes); err != nil {
-			results = append(results, result{Node: node.Name, Status: "error", Error: err.Error()})
-			continue
-		}
-		results = append(results, result{Node: node.Name, Status: "pushed"})
+		nodeIDs = append(nodeIDs, node.ID)
 	}
-
-	writeJSON(w, http.StatusOK, results)
+	writeJSON(w, http.StatusOK, h.Config.SyncNodes(nodeIDs))
 }
 
 func (h *BatchHandler) ApplyTemplate(w http.ResponseWriter, r *http.Request) {

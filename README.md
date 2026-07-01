@@ -91,8 +91,9 @@ All admin endpoints require `Authorization: Bearer <ADMIN_TOKEN>`.
 - `PUT/DELETE /api/users/{id}` — update / delete
   - update accepts optional `node_ids`; user fields and assignments are saved together
   - affected node configs are regenerated and pushed before the response returns
+  - if any push fails, the database change is rolled back and the previous config is restored
   - per-node push status is returned in the `sync` field
-- `POST /api/users/{id}/reset-traffic` — reset traffic counter
+- `POST /api/users/{id}/reset-traffic` — reset traffic counter and synchronize affected nodes
 - `POST /api/users/{id}/reset-sub-token` — regenerate subscription token
 - `POST /api/register` — public registration (disabled by default)
 
@@ -103,28 +104,34 @@ All admin endpoints require `Authorization: Bearer <ADMIN_TOKEN>`.
 - `DELETE /api/users/{id}/access` — revoke
 
 Granting, replacing, or revoking access automatically synchronizes every
-affected enabled sing-box node. Existing access endpoints remain available for
-API compatibility; the admin UI edits status and node access together.
+affected sing-box node. A failed synchronization rolls the access change back.
+Existing access endpoints remain available for API compatibility; the admin UI
+edits status and node access together.
 
 ### Nodes
 - `GET/POST /api/nodes` — list / create
 - `GET/PUT/DELETE /api/nodes/{id}` — get (with inbounds) / update / delete
-- `POST /api/nodes/{id}/inbounds` — add inbound manually
-- `DELETE /api/inbounds/{id}` — remove inbound
+- `POST /api/nodes/{id}/inbounds` — add inbound and synchronize the node
+- `DELETE /api/inbounds/{id}` — remove inbound and synchronize the node
+
+Inbound changes are rolled back when node synchronization fails. A node domain
+used by Hysteria2 or HTTPUpgrade must be migrated through `auto-setup`; direct
+domain edits are rejected so certificate paths and inbound settings cannot
+become stale.
 
 ### Node Operations
 - `GET /api/nodes/{id}/status` — SSH reachability + sing-box status
 - `GET /api/nodes/{id}/version` — sing-box version
 - `POST /api/nodes/{id}/setup-ssh` — inject panel SSH key via password
 - `POST /api/nodes/{id}/install` — install/upgrade sing-box
-- `POST /api/nodes/{id}/auto-setup` — one-click protocol configuration
+- `POST /api/nodes/{id}/auto-setup` — idempotent protocol setup and domain migration
 - `POST /api/nodes/{id}/cert` — issue TLS certificate
 
 ### Config
 - `POST /api/nodes/{id}/generate` — preview config (dry-run)
 - `POST /api/nodes/{id}/push` — push + restart
 - `POST /api/batch/push-all` — push all enabled nodes
-- `GET/PUT /api/nodes/{id}/raw-config` — read/write raw config
+- `GET /api/nodes/{id}/raw-config` — inspect deployed config (read-only)
 
 ### Validation
 - `GET /api/validate/dns?domain=X&ip=Y` — DNS resolution check
