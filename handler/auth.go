@@ -234,6 +234,7 @@ func (h *MeHandler) HandleMyNodes(w http.ResponseWriter, r *http.Request) {
 type AccessHandler struct {
 	Access *model.AccessStore
 	Nodes  *model.NodeStore
+	Sync   NodeSynchronizer
 }
 
 func (h *AccessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -243,6 +244,8 @@ func (h *AccessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.listAccess(w, r)
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/users/") && strings.HasSuffix(path, "/access"):
 		h.grantAccess(w, r)
+	case r.Method == http.MethodPut && strings.HasPrefix(path, "/api/users/") && strings.HasSuffix(path, "/access"):
+		h.replaceAccess(w, r)
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/users/") && strings.HasSuffix(path, "/access"):
 		h.revokeAccess(w, r)
 	default:
@@ -287,16 +290,33 @@ func (h *AccessHandler) grantAccess(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+	before, err := h.Access.ListNodeIDs(userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if req.All {
-		h.Access.GrantAll(userID)
+		err = h.Access.GrantAll(userID)
 	} else if req.NodeID > 0 {
-		h.Access.Grant(userID, req.NodeID)
+		err = h.Access.Grant(userID, req.NodeID)
 	} else {
 		writeError(w, http.StatusBadRequest, "specify node_id or all:true")
 		return
 	}
-	nodeIDs, _ := h.Access.ListNodeIDs(userID)
-	writeJSON(w, http.StatusOK, map[string]any{"user_id": userID, "accessible_nodes": nodeIDs})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	nodeIDs, err := h.Access.ListNodeIDs(userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user_id":          userID,
+		"accessible_nodes": nodeIDs,
+		"sync":             syncNodes(h.Sync, changedIDs(before, nodeIDs)),
+	})
 }
 
 func (h *AccessHandler) revokeAccess(w http.ResponseWriter, r *http.Request) {
@@ -310,13 +330,67 @@ func (h *AccessHandler) revokeAccess(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if req.All {
-		h.Access.RevokeAll(userID)
-	} else if req.NodeID > 0 {
-		h.Access.Revoke(userID, req.NodeID)
+	before, err := h.Access.ListNodeIDs(userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	nodeIDs, _ := h.Access.ListNodeIDs(userID)
-	writeJSON(w, http.StatusOK, map[string]any{"user_id": userID, "accessible_nodes": nodeIDs})
+	if req.All {
+		err = h.Access.RevokeAll(userID)
+	} else if req.NodeID > 0 {
+		err = h.Access.Revoke(userID, req.NodeID)
+	} else {
+		writeError(w, http.StatusBadRequest, "specify node_id or all:true")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	nodeIDs, err := h.Access.ListNodeIDs(userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user_id":          userID,
+		"accessible_nodes": nodeIDs,
+		"sync":             syncNodes(h.Sync, changedIDs(before, nodeIDs)),
+	})
+}
+
+func (h *AccessHandler) replaceAccess(w http.ResponseWriter, r *http.Request) {
+	userID := extractUserID(r.URL.Path)
+	if userID == 0 {
+		writeError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	var req struct {
+		NodeIDs []int `json:"node_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	before, err := h.Access.ListNodeIDs(userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := h.Access.Replace(userID, req.NodeIDs); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	nodeIDs, err := h.Access.ListNodeIDs(userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user_id":          userID,
+		"accessible_nodes": nodeIDs,
+		"sync":             syncNodes(h.Sync, changedIDs(before, nodeIDs)),
+	})
 }
 
 func extractUserID(path string) int {

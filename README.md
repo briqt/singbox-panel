@@ -89,6 +89,9 @@ All admin endpoints require `Authorization: Bearer <ADMIN_TOKEN>`.
 ### Users
 - `GET/POST /api/users` — list / create
 - `PUT/DELETE /api/users/{id}` — update / delete
+  - update accepts optional `node_ids`; user fields and assignments are saved together
+  - affected node configs are regenerated and pushed before the response returns
+  - per-node push status is returned in the `sync` field
 - `POST /api/users/{id}/reset-traffic` — reset traffic counter
 - `POST /api/users/{id}/reset-sub-token` — regenerate subscription token
 - `POST /api/register` — public registration (disabled by default)
@@ -96,7 +99,12 @@ All admin endpoints require `Authorization: Bearer <ADMIN_TOKEN>`.
 ### Access Control
 - `GET /api/users/{id}/access` — list accessible nodes
 - `POST /api/users/{id}/access` — grant (`{node_id}` or `{all:true}`)
+- `PUT /api/users/{id}/access` — atomically replace (`{node_ids:[1,2]}`)
 - `DELETE /api/users/{id}/access` — revoke
+
+Granting, replacing, or revoking access automatically synchronizes every
+affected enabled sing-box node. Existing access endpoints remain available for
+API compatibility; the admin UI edits status and node access together.
 
 ### Nodes
 - `GET/POST /api/nodes` — list / create

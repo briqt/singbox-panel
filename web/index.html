@@ -179,8 +179,6 @@
             <td class="px-4 py-3">
               <div class="flex items-center justify-end gap-1">
                 <button @click="editUser(u)" class="px-2 py-1 text-xs text-blue-500 hover:bg-blue-50 rounded transition">Edit</button>
-                <button @click="toggleUser(u)" :class="u.enabled?'text-emerald-600':'text-gray-400'" class="px-2 py-1 text-xs rounded hover:bg-gray-100 transition" x-text="u.enabled?'on':'off'"></button>
-                <button @click="showAccessModal(u)" class="px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 rounded transition" x-text="T('access')"></button>
                 <button @click="resetTraffic(u)" class="px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 rounded transition" x-text="T('reset')"></button>
                 <button @click="deleteUser(u)" class="px-2 py-1 text-xs text-red-400 hover:bg-red-50 rounded transition" x-text="T('del')"></button>
               </div>
@@ -432,14 +430,37 @@
 
   <!-- Edit User Modal -->
   <div x-show="showEditUser" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" @click.self="showEditUser=false">
-    <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-sm shadow-xl">
+    <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-md shadow-xl">
       <h3 class="text-sm font-semibold text-gray-900 mb-4" x-text="(lang==='zh'?'编辑用户: ':'Edit User: ')+(editingUser?.name||'')"></h3>
       <div class="space-y-3">
-        <div>
-          <label class="text-xs text-gray-500 mb-1 block" x-text="lang==='zh'?'状态':'Status'"></label>
+        <div class="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2.5">
+          <div>
+            <label class="text-xs text-gray-700 block" x-text="lang==='zh'?'启用用户':'User enabled'"></label>
+            <span class="text-[11px] text-gray-400" x-text="lang==='zh'?'保存后自动同步节点配置':'Node configs sync automatically after save'"></span>
+          </div>
           <button @click="editingUser.enabled=!editingUser.enabled" :class="editingUser.enabled?'bg-emerald-500':'bg-gray-300'" class="relative w-10 h-5 rounded-full transition">
             <span :class="editingUser.enabled?'translate-x-5':'translate-x-0.5'" class="absolute top-0.5 left-0 w-4 h-4 bg-white rounded-full transition shadow"></span>
           </button>
+        </div>
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <label class="text-xs text-gray-500" x-text="T('nodeAccess')"></label>
+            <div class="flex gap-2">
+              <button @click="editingUser.node_ids=nodes.map(n=>n.id)" class="text-[11px] text-blue-600 hover:text-blue-700" x-text="lang==='zh'?'全选':'All'"></button>
+              <button @click="editingUser.node_ids=[]" class="text-[11px] text-gray-400 hover:text-gray-600" x-text="lang==='zh'?'清空':'None'"></button>
+            </div>
+          </div>
+          <div class="max-h-40 overflow-y-auto rounded-lg border border-gray-200 divide-y divide-gray-100">
+            <template x-for="n in nodes" :key="n.id">
+              <label class="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 cursor-pointer">
+                <input type="checkbox" x-model="editingUser.node_ids" :value="n.id"
+                       class="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-0 focus:ring-offset-0">
+                <span class="text-sm text-gray-700" x-text="n.name"></span>
+                <span class="text-xs text-gray-400 ml-auto" x-text="n.domain||n.host"></span>
+              </label>
+            </template>
+            <div x-show="nodes.length===0" class="px-3 py-3 text-xs text-gray-400" x-text="T('noNodes')"></div>
+          </div>
         </div>
         <div>
           <label class="text-xs text-gray-500 mb-1 block" x-text="lang==='zh'?'流量限额 (GB, 0=无限)':'Traffic Limit (GB, 0=unlimited)'"></label>
@@ -458,8 +479,8 @@
         </div>
       </div>
       <div class="flex justify-end gap-2 mt-5">
-        <button @click="showEditUser=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition" x-text="T('cancel')"></button>
-        <button @click="saveEditUser()" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition" x-text="lang==='zh'?'保存':'Save'"></button>
+        <button @click="showEditUser=false" :disabled="savingUser" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition disabled:opacity-50" x-text="T('cancel')"></button>
+        <button @click="saveEditUser()" :disabled="savingUser" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition disabled:opacity-50" x-text="savingUser?T('working'):(lang==='zh'?'保存并同步':'Save & Sync')"></button>
       </div>
     </div>
   </div>
@@ -482,28 +503,6 @@
       <div class="flex justify-end gap-2 mt-5">
         <button @click="showCreateNode=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition" x-text="T('cancel')"></button>
         <button @click="createNode()" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition" x-text="T('create')"></button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Access Modal -->
-  <div x-show="showAccess" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" @click.self="showAccess=false">
-    <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-sm shadow-xl">
-      <h3 class="text-sm font-semibold text-gray-900 mb-1" x-text="T('nodeAccess')"></h3>
-      <p class="text-xs text-gray-400 mb-4" x-text="accessUser?accessUser.name:''"></p>
-      <div class="space-y-1 max-h-60 overflow-y-auto">
-        <template x-for="n in nodes" :key="n.id">
-          <label class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 cursor-pointer transition">
-            <input type="checkbox" :checked="accessNodeIds.includes(n.id)" @change="toggleAccess(n.id,$event.target.checked)"
-                   class="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-0 focus:ring-offset-0">
-            <span class="text-sm text-gray-700" x-text="n.name"></span>
-            <span class="text-xs text-gray-400 ml-auto" x-text="n.domain||n.host"></span>
-          </label>
-        </template>
-      </div>
-      <div class="flex justify-between mt-5">
-        <button @click="grantAll()" class="px-3 py-1.5 text-xs text-blue-600 hover:text-blue-700 transition" x-text="T('grantAll')"></button>
-        <button @click="showAccess=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition" x-text="T('done')"></button>
       </div>
     </div>
   </div>
@@ -629,10 +628,10 @@ function app(){return{
   showCreateUser:false,
   newUser:{name:'',traffic_limit_gb:100,expire_at:''},
   showEditUser:false,
-  editingUser:{id:0,name:'',enabled:true,traffic_limit_gb:0,expire_at:'',traffic_reset_day:1},
+  editingUser:{id:0,name:'',enabled:true,node_ids:[],traffic_limit_gb:0,expire_at:'',traffic_reset_day:1},
+  savingUser:false,
   showCreateNode:false,
   newNode:{name:'',host:'',domain:'',port:22,ssh_user:'root'},
-  showAccess:false,accessUser:null,accessNodeIds:[],
   expandedNodes:{},nodeDetails:{},nodeStatuses:{},
   showSSHSetup:false,sshNode:null,sshPassword:'',
   showAutoSetup:false,autoSetupNode:null,autoSetupDomain:'',autoSetupProtos:[],
@@ -725,30 +724,47 @@ function app(){return{
     this.showCreateUser=false;this.newUser={name:'',traffic_limit_gb:100,expire_at:''};
     this.toast(this.lang==='zh'?'用户已创建':'User created');this.loadTab();
   },
-  editUser(u){
-    this.editingUser={
-      id:u.id, name:u.name, enabled:u.enabled,
-      traffic_limit_gb: u.traffic_limit_bytes ? Math.round(u.traffic_limit_bytes/1073741824*100)/100 : 0,
-      expire_at: u.expire_at ? u.expire_at.split(' ')[0] : '',
-      traffic_reset_day: u.traffic_reset_day || 1
-    };
-    this.showEditUser=true;
+  async editUser(u){
+    try{
+      const requests=[this.api('/api/users/'+u.id+'/access')];
+      if(!this.nodes.length)requests.push(this.api('/api/nodes'));
+      const results=await Promise.all(requests);
+      const access=results[0]||[];
+      if(results[1])this.nodes=results[1];
+      this.editingUser={
+        id:u.id, name:u.name, enabled:u.enabled,
+        node_ids:access.map(n=>n.id),
+        traffic_limit_gb: u.traffic_limit_bytes ? Math.round(u.traffic_limit_bytes/1073741824*100)/100 : 0,
+        expire_at: u.expire_at ? u.expire_at.split(' ')[0] : '',
+        traffic_reset_day: u.traffic_reset_day || 1
+      };
+      this.showEditUser=true;
+    }catch(e){this.toast(e.message,'error')}
   },
   async saveEditUser(){
     const u=this.editingUser;
     const body={
       enabled:u.enabled,
+      node_ids:u.node_ids.map(Number),
       traffic_limit_bytes:Math.round(u.traffic_limit_gb*1073741824),
       expire_at: u.expire_at ? u.expire_at+' 00:00:00' : '',
       traffic_reset_day: u.traffic_reset_day
     };
-    await this.api('/api/users/'+u.id,{method:'PUT',body:JSON.stringify(body)});
-    this.showEditUser=false;
-    this.toast(this.lang==='zh'?'已保存':'Saved');this.loadTab();
-  },
-  async toggleUser(u){
-    await this.api('/api/users/'+u.id,{method:'PUT',body:JSON.stringify({enabled:!u.enabled})});
-    this.toast(u.name+(u.enabled?(this.lang==='zh'?' 已禁用':' disabled'):(this.lang==='zh'?' 已启用':' enabled')));this.loadTab();
+    this.savingUser=true;
+    try{
+      const result=await this.api('/api/users/'+u.id,{method:'PUT',body:JSON.stringify(body)});
+      const sync=result.sync||[];
+      const failed=sync.filter(r=>r.status==='error');
+      const pushed=sync.filter(r=>r.status==='pushed').length;
+      this.showEditUser=false;
+      if(failed.length){
+        this.toast((this.lang==='zh'?'用户已保存，但节点同步失败：':'User saved, but sync failed: ')+failed.map(r=>r.node||('#'+r.node_id)).join(', '),'error');
+      }else{
+        this.toast(this.lang==='zh'?`已保存，同步 ${pushed} 个节点`:`Saved, synced ${pushed} node(s)`);
+      }
+      await this.loadTab();
+    }catch(e){this.toast(e.message,'error')}
+    finally{this.savingUser=false}
   },
   async resetTraffic(u){
     if(!confirm((this.lang==='zh'?'重置流量：':'Reset traffic for ')+u.name+'?'))return;
@@ -763,21 +779,6 @@ function app(){return{
   copySubLink(u){
     navigator.clipboard.writeText(location.origin+'/sub/'+u.sub_token);
     this.toast(this.lang==='zh'?'订阅链接已复制':'Link copied');
-  },
-
-  async showAccessModal(u){
-    this.accessUser=u;this.showAccess=true;
-    const nodes=await this.api('/api/users/'+u.id+'/access');
-    this.accessNodeIds=(nodes||[]).map(n=>n.id);
-  },
-  async toggleAccess(nodeId,checked){
-    const method=checked?'POST':'DELETE';
-    await this.api('/api/users/'+this.accessUser.id+'/access',{method,body:JSON.stringify({node_id:nodeId})});
-    if(checked){this.accessNodeIds.push(nodeId)}else{this.accessNodeIds=this.accessNodeIds.filter(x=>x!==nodeId)}
-  },
-  async grantAll(){
-    await this.api('/api/users/'+this.accessUser.id+'/access',{method:'POST',body:JSON.stringify({all:true})});
-    this.accessNodeIds=this.nodes.map(n=>n.id);this.toast(this.lang==='zh'?'已授权全部节点':'All nodes granted');
   },
 
   async createNode(){

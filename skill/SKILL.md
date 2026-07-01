@@ -102,15 +102,16 @@ POST /api/users/{id}/reset-traffic
 ### 用户
 - `GET /api/users` — 列表
 - `POST /api/users` — 创建
-- `PUT /api/users/{id}` — 更新 (name/enabled/traffic_limit_bytes/expire_at)
+- `PUT /api/users/{id}` — 更新 (name/enabled/traffic_limit_bytes/expire_at/node_ids)，用户与权限合并保存并同步受影响节点
 - `DELETE /api/users/{id}` — 删除
 - `POST /api/users/{id}/reset-traffic` — 重置流量
 - `POST /api/users/{id}/reset-sub-token` — 重置订阅令牌
 
 ### 访问控制
 - `GET /api/users/{id}/access` — 查看可访问节点
-- `POST /api/users/{id}/access` — 授权 ({node_id} 或 {all:true})
-- `DELETE /api/users/{id}/access` — 撤销 ({node_id} 或 {all:true})
+- `POST /api/users/{id}/access` — 授权 ({node_id} 或 {all:true})，自动同步节点
+- `PUT /api/users/{id}/access` — 原子替换权限 ({node_ids:[1,2]})，自动同步节点
+- `DELETE /api/users/{id}/access` — 撤销 ({node_id} 或 {all:true})，自动同步节点
 
 ### 节点
 - `GET /api/nodes` / `POST /api/nodes` / `PUT /api/nodes/{id}` / `DELETE /api/nodes/{id}`
