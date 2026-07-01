@@ -568,10 +568,9 @@
         <h3 class="text-sm font-semibold text-gray-900" x-text="T('rawConfig')+' — '+(rawCfgNode?rawCfgNode.name:'')"></h3>
         <button @click="showRawCfg=false" class="text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>
       </div>
-      <textarea x-model="rawCfgContent" class="flex-1 w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs font-mono focus:outline-none focus:border-blue-500 transition resize-none min-h-[300px]" spellcheck="false"></textarea>
-      <div class="flex justify-end gap-2 mt-3">
-        <button @click="showRawCfg=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition" x-text="T('cancel')"></button>
-        <button @click="saveRawConfig()" :disabled="opLoading" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition disabled:opacity-50" x-text="opLoading?T('working'):T('saveRestart')"></button>
+      <textarea x-model="rawCfgContent" readonly class="flex-1 w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs font-mono focus:outline-none resize-none min-h-[300px] cursor-text" spellcheck="false"></textarea>
+      <div class="flex justify-end mt-3">
+        <button @click="showRawCfg=false" class="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 transition" x-text="lang==='zh'?'关闭':'Close'"></button>
       </div>
     </div>
   </div>
@@ -596,7 +595,7 @@ const I18N={
     rootPassword:'Root password',sshHint:'Inject panel SSH key to the node for key-based auth',confirm:'Confirm',working:'Working...',
     domain:'Domain',protocols:'Protocols',needsDomain:'needs domain',noDomain:'no domain needed',forCDN:'for CDN/blocked IP',
     autoSetupDomainHint:'Leave empty to use node domain. With domain: Hy2+Reality. Without: Reality only.',
-    startSetup:'Start Setup',saveRestart:'Save & Restart',notInstalled:'not installed',
+    startSetup:'Start Setup',notInstalled:'not installed',
     register:'Register',myInfo:'My Info',myNodes:'My Nodes',noNodes:'No accessible nodes',copy:'Copy',copied:'Copied',
     regSuccess:'Registered! Waiting for admin approval.',invalidCreds:'Invalid credentials',notApproved:'Account not yet approved'},
   zh:{overview:'概览',users:'用户',nodes:'节点',stats:'统计',signOut:'退出',signIn:'登录',loginHint:'请登录以继续',
@@ -609,7 +608,7 @@ const I18N={
     rootPassword:'Root密码',sshHint:'注入面板SSH公钥到节点，实现免密连接',confirm:'确认',working:'执行中...',
     domain:'域名',protocols:'协议',needsDomain:'需要域名',noDomain:'无需域名',forCDN:'CDN/被墙IP使用',
     autoSetupDomainHint:'留空使用节点域名。有域名→Hy2+Reality，无域名→仅Reality',
-    startSetup:'开始配置',saveRestart:'保存并重启',notInstalled:'未安装',
+    startSetup:'开始配置',notInstalled:'未安装',
     register:'注册',myInfo:'我的信息',myNodes:'我的节点',noNodes:'暂无可用节点',copy:'复制',copied:'已复制',
     regSuccess:'注册成功，等待管理员审核',invalidCreds:'用户名或密码错误',notApproved:'账号待审核'}
 };
@@ -754,27 +753,29 @@ function app(){return{
     try{
       const result=await this.api('/api/users/'+u.id,{method:'PUT',body:JSON.stringify(body)});
       const sync=result.sync||[];
-      const failed=sync.filter(r=>r.status==='error');
       const pushed=sync.filter(r=>r.status==='pushed').length;
       this.showEditUser=false;
-      if(failed.length){
-        this.toast((this.lang==='zh'?'用户已保存，但节点同步失败：':'User saved, but sync failed: ')+failed.map(r=>r.node||('#'+r.node_id)).join(', '),'error');
-      }else{
-        this.toast(this.lang==='zh'?`已保存，同步 ${pushed} 个节点`:`Saved, synced ${pushed} node(s)`);
-      }
+      this.toast(this.lang==='zh'?`已保存，同步 ${pushed} 个节点`:`Saved, synced ${pushed} node(s)`);
       await this.loadTab();
     }catch(e){this.toast(e.message,'error')}
     finally{this.savingUser=false}
   },
   async resetTraffic(u){
     if(!confirm((this.lang==='zh'?'重置流量：':'Reset traffic for ')+u.name+'?'))return;
-    await this.api('/api/users/'+u.id+'/reset-traffic',{method:'POST'});
-    this.toast(this.lang==='zh'?'流量已重置':'Traffic reset');this.loadTab();
+    try{
+      await this.api('/api/users/'+u.id+'/reset-traffic',{method:'POST'});
+      this.toast(this.lang==='zh'?'流量已重置并同步节点':'Traffic reset and nodes synchronized');this.loadTab();
+    }catch(e){this.toast(e.message,'error')}
   },
   async deleteUser(u){
-    if(!confirm((this.lang==='zh'?'删除用户 ':'Delete ')+u.name+'?'))return;
-    await this.api('/api/users/'+u.id,{method:'DELETE'});
-    this.toast(this.lang==='zh'?'已删除':'Deleted');this.loadTab();
+    const warning=this.lang==='zh'
+      ?`删除用户 ${u.name}？面板会先从所有节点移除该用户，成功后再删除账号。`
+      :`Delete ${u.name}? The user will be removed from every node before the account is deleted.`;
+    if(!confirm(warning))return;
+    try{
+      await this.api('/api/users/'+u.id,{method:'DELETE'});
+      this.toast(this.lang==='zh'?'用户已从节点移除并删除':'User removed from nodes and deleted');this.loadTab();
+    }catch(e){this.toast(e.message,'error')}
   },
   copySubLink(u){
     navigator.clipboard.writeText(location.origin+'/sub/'+u.sub_token);
@@ -789,15 +790,26 @@ function app(){return{
     this.toast(this.lang==='zh'?'节点已创建':'Node created');this.loadTab();
   },
   async deleteNode(n){
-    if(!confirm((this.lang==='zh'?'删除节点 ':'Delete node ')+n.name+'?'))return;
-    await this.api('/api/nodes/'+n.id,{method:'DELETE'});
-    this.toast(this.lang==='zh'?'已删除':'Deleted');this.loadTab();
+    const warning=this.lang==='zh'
+      ?`删除节点 ${n.name}？仅允许删除已移除全部入站和用户权限的节点。`
+      :`Delete node ${n.name}? Deletion is allowed only after all inbounds and user access are removed.`;
+    if(!confirm(warning))return;
+    try{
+      await this.api('/api/nodes/'+n.id,{method:'DELETE'});
+      this.toast(this.lang==='zh'?'节点已安全停用并删除':'Node safely decommissioned and deleted');
+      this.loadTab();
+    }catch(e){this.toast(e.message,'error')}
   },
   async deleteInbound(ib){
-    if(!confirm((this.lang==='zh'?'删除协议 ':'Delete inbound ')+ib.protocol+'?'))return;
-    await this.api('/api/inbounds/'+ib.id,{method:'DELETE'});
-    this.toast(this.lang==='zh'?'已删除':'Deleted');
-    const nodeId=ib.node_id;if(nodeId&&this.nodeDetails[nodeId])this.nodeDetails[nodeId]=await this.api('/api/nodes/'+nodeId);
+    const warning=this.lang==='zh'
+      ?`删除协议 ${ib.protocol}？保存后会立即同步节点，使用该协议的旧订阅将失效。`
+      :`Delete ${ib.protocol}? The node will sync immediately and existing subscriptions for this inbound will stop working.`;
+    if(!confirm(warning))return;
+    try{
+      await this.api('/api/inbounds/'+ib.id,{method:'DELETE'});
+      this.toast(this.lang==='zh'?'协议已删除并同步节点':'Inbound deleted and node synchronized');
+      const nodeId=ib.node_id;if(nodeId&&this.nodeDetails[nodeId])this.nodeDetails[nodeId]=await this.api('/api/nodes/'+nodeId);
+    }catch(e){this.toast(e.message,'error')}
   },
   async moveNode(n, dir){
     const idx=this.nodes.findIndex(x=>x.id===n.id);
@@ -862,9 +874,15 @@ function app(){return{
     }catch(e){this.toast(e.message,'error')}
     this.opLoading=false;
   },
-  showAutoSetupModal(n){
+  async showAutoSetupModal(n){
     this.autoSetupNode=n;this.autoSetupDomain=n.domain||'';
-    this.autoSetupProtos=n.domain?['hysteria2','vless-reality']:['vless-reality'];
+    try{
+      const detail=this.nodeDetails[n.id]||await this.api('/api/nodes/'+n.id);
+      const existing=[...new Set((detail.inbounds||[]).map(ib=>ib.protocol))];
+      this.autoSetupProtos=existing.length?existing:(n.domain?['hysteria2','vless-reality']:['vless-reality']);
+    }catch(e){
+      this.toast(e.message,'error');return;
+    }
     this.showAutoSetup=true;
   },
   async doAutoSetup(){
@@ -873,8 +891,8 @@ function app(){return{
       const body={domain:this.autoSetupDomain};
       if(this.autoSetupProtos.length)body.protocols=this.autoSetupProtos;
       const r=await this.api('/api/nodes/'+this.autoSetupNode.id+'/auto-setup',{method:'POST',body:JSON.stringify(body)});
-      const ok=(r.inbounds||[]).filter(x=>x.status==='ok').length;
-      this.toast((this.lang==='zh'?'配置完成，':'Setup done, ')+ok+(this.lang==='zh'?' 个协议':' protocols'));
+      const changed=(r.inbounds||[]).filter(x=>x.status==='ok'||x.status==='updated').length;
+      this.toast((this.lang==='zh'?'配置完成并已同步，':'Setup complete and synchronized, ')+changed+(this.lang==='zh'?' 个协议有变更':' protocol(s) changed'));
       this.showAutoSetup=false;this.loadTab();
       if(this.expandedNodes[this.autoSetupNode.id])this.nodeDetails[this.autoSetupNode.id]=await this.api('/api/nodes/'+this.autoSetupNode.id);
     }catch(e){this.toast(e.message,'error')}
@@ -899,19 +917,18 @@ function app(){return{
       this.rawCfgContent=typeof r==='string'?r:JSON.stringify(r,null,2);
     }catch(e){this.rawCfgContent='// '+e.message}
   },
-  async saveRawConfig(){
-    this.opLoading=true;
-    try{
-      let body=this.rawCfgContent;
-      try{body=JSON.stringify(JSON.parse(this.rawCfgContent))}catch(_){}
-      await this.api('/api/nodes/'+this.rawCfgNode.id+'/raw-config?restart=true',{method:'PUT',body});
-      this.toast(this.lang==='zh'?'已保存并重启':'Saved & restarted');this.showRawCfg=false;
-    }catch(e){this.toast(e.message,'error')}
-    this.opLoading=false;
-  },
   async pushAll(){
     if(!confirm(this.lang==='zh'?'推送到所有节点？':'Push config to ALL nodes?'))return;
-    try{const r=await this.api('/api/batch/push-all',{method:'POST'});this.toast((this.lang==='zh'?'已推送 ':'Pushed ')+r.length+(this.lang==='zh'?' 个节点':' nodes'))}
+    try{
+      const r=await this.api('/api/batch/push-all',{method:'POST'});
+      const pushed=r.filter(x=>x.status==='pushed').length;
+      const failed=r.filter(x=>x.status!=='pushed');
+      if(failed.length){
+        this.toast((this.lang==='zh'?`已推送 ${pushed} 个，失败：`:`Pushed ${pushed}; failed: `)+failed.map(x=>x.node||('#'+x.node_id)).join(', '),'error');
+      }else{
+        this.toast(this.lang==='zh'?`已推送 ${pushed} 个节点`:`Pushed ${pushed} node(s)`);
+      }
+    }
     catch(e){this.toast(e.message,'error')}
   }
 }}

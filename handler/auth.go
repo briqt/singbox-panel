@@ -309,14 +309,11 @@ func (h *AccessHandler) grantAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	nodeIDs, err := h.Access.ListNodeIDs(userID)
 	if err != nil {
+		h.Access.Replace(userID, before)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"user_id":          userID,
-		"accessible_nodes": nodeIDs,
-		"sync":             syncNodes(h.Sync, changedIDs(before, nodeIDs)),
-	})
+	h.completeAccessChange(w, userID, before, nodeIDs)
 }
 
 func (h *AccessHandler) revokeAccess(w http.ResponseWriter, r *http.Request) {
@@ -349,14 +346,11 @@ func (h *AccessHandler) revokeAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	nodeIDs, err := h.Access.ListNodeIDs(userID)
 	if err != nil {
+		h.Access.Replace(userID, before)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"user_id":          userID,
-		"accessible_nodes": nodeIDs,
-		"sync":             syncNodes(h.Sync, changedIDs(before, nodeIDs)),
-	})
+	h.completeAccessChange(w, userID, before, nodeIDs)
 }
 
 func (h *AccessHandler) replaceAccess(w http.ResponseWriter, r *http.Request) {
@@ -383,13 +377,33 @@ func (h *AccessHandler) replaceAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	nodeIDs, err := h.Access.ListNodeIDs(userID)
 	if err != nil {
+		h.Access.Replace(userID, before)
 		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	h.completeAccessChange(w, userID, before, nodeIDs)
+}
+
+func (h *AccessHandler) completeAccessChange(w http.ResponseWriter, userID int, before, after []int) {
+	targetNodeIDs := changedIDs(before, after)
+	results := syncNodes(h.Sync, targetNodeIDs)
+	if syncErr := syncFailure(results); syncErr != nil {
+		if rollbackErr := h.Access.Replace(userID, before); rollbackErr != nil {
+			writeError(w, http.StatusInternalServerError, "node sync failed and access rollback failed: "+rollbackErr.Error())
+			return
+		}
+		restoreResults := syncNodes(h.Sync, targetNodeIDs)
+		if restoreErr := syncFailure(restoreResults); restoreErr != nil {
+			writeError(w, http.StatusBadGateway, "access change was rolled back, but restoring one or more nodes failed: "+restoreErr.Error())
+			return
+		}
+		writeError(w, http.StatusBadGateway, "access change was rolled back: "+syncErr.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user_id":          userID,
-		"accessible_nodes": nodeIDs,
-		"sync":             syncNodes(h.Sync, changedIDs(before, nodeIDs)),
+		"accessible_nodes": after,
+		"sync":             results,
 	})
 }
 

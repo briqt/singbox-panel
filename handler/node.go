@@ -9,7 +9,9 @@ import (
 )
 
 type NodeHandler struct {
-	Store *model.NodeStore
+	Store  *model.NodeStore
+	Access *model.AccessStore
+	Sync   NodeSynchronizer
 }
 
 func (h *NodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -58,6 +60,10 @@ func (h *NodeHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name and host are required")
 		return
 	}
+	if req.Domain != "" && !validDomainName(req.Domain) {
+		writeError(w, http.StatusBadRequest, "invalid domain")
+		return
+	}
 	node, err := h.Store.Create(req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -91,6 +97,28 @@ func (h *NodeHandler) update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+	current, err := h.Store.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if req.Domain != nil && *req.Domain != current.Domain {
+		if *req.Domain != "" && !validDomainName(*req.Domain) {
+			writeError(w, http.StatusBadRequest, "invalid domain")
+			return
+		}
+		inbounds, err := h.Store.ListInbounds(id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for _, inbound := range inbounds {
+			if inbound.Protocol == "hysteria2" || inbound.Protocol == "vless-httpupgrade" {
+				writeError(w, http.StatusConflict, "node has domain-bound inbounds; migrate the domain through auto-setup")
+				return
+			}
+		}
+	}
 	node, err := h.Store.Update(id, req)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "node not found")
@@ -105,11 +133,39 @@ func (h *NodeHandler) delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
+	node, err := h.Store.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if node.ProxyType != "singbox" {
+		writeError(w, http.StatusConflict, "automatic remote decommission is only supported for singbox nodes")
+		return
+	}
+	inbounds, err := h.Store.ListInbounds(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	accessCount, err := h.Access.CountForNode(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if len(inbounds) > 0 || accessCount > 0 {
+		writeError(w, http.StatusConflict, "node still has inbounds or user access; remove them before deleting the node")
+		return
+	}
+	results := syncNodes(h.Sync, []int{id})
+	if err := syncFailure(results); err != nil {
+		writeError(w, http.StatusBadGateway, "refusing to delete node before remote decommission: "+err.Error())
+		return
+	}
 	if err := h.Store.Delete(id); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "node": node.Name, "sync": results})
 }
 
 func (h *NodeHandler) createInbound(w http.ResponseWriter, r *http.Request) {
@@ -123,21 +179,33 @@ func (h *NodeHandler) createInbound(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid node id")
 		return
 	}
+	node, err := h.Store.Get(nodeID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if node.ProxyType != "singbox" {
+		writeError(w, http.StatusBadRequest, "inbound synchronization is only supported for singbox nodes")
+		return
+	}
 	var req model.CreateInboundReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if req.Protocol == "" || req.Port == 0 {
-		writeError(w, http.StatusBadRequest, "protocol and port are required")
+	if req.Protocol == "" || req.Port < 1 || req.Port > 65535 {
+		writeError(w, http.StatusBadRequest, "protocol and a valid port are required")
 		return
 	}
-	// Validate TLS domain DNS for protocols that need it
-	if req.Protocol == "hysteria2" {
-		var settings map[string]any
-		json.Unmarshal(req.Settings, &settings)
+	var settings map[string]any
+	if err := json.Unmarshal(req.Settings, &settings); err != nil {
+		writeError(w, http.StatusBadRequest, "settings must be a JSON object")
+		return
+	}
+	switch req.Protocol {
+	case "hysteria2":
 		domain, _ := settings["domain"].(string)
-		if domain == "" {
+		if !validDomainName(domain) {
 			writeError(w, http.StatusBadRequest, "hysteria2 requires domain in settings")
 			return
 		}
@@ -147,30 +215,50 @@ func (h *NodeHandler) createInbound(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "hysteria2 requires cert_path and key_path in settings")
 			return
 		}
-	}
-	if req.Protocol == "vless-httpupgrade" {
-		var settings map[string]any
-		json.Unmarshal(req.Settings, &settings)
+	case "vless-httpupgrade":
 		domain, _ := settings["domain"].(string)
-		if domain == "" {
+		if !validDomainName(domain) {
 			writeError(w, http.StatusBadRequest, "vless-httpupgrade requires domain in settings")
 			return
 		}
-	}
-	if req.Protocol == "vless-reality" {
-		var settings map[string]any
-		json.Unmarshal(req.Settings, &settings)
-		if settings["sni"] == nil || settings["private_key"] == nil || settings["public_key"] == nil {
+		certPath, _ := settings["cert_path"].(string)
+		keyPath, _ := settings["key_path"].(string)
+		if certPath == "" || keyPath == "" {
+			writeError(w, http.StatusBadRequest, "vless-httpupgrade requires cert_path and key_path in settings")
+			return
+		}
+	case "vless-reality":
+		sni, _ := settings["sni"].(string)
+		privateKey, _ := settings["private_key"].(string)
+		publicKey, _ := settings["public_key"].(string)
+		if !validDomainName(sni) || privateKey == "" || publicKey == "" {
 			writeError(w, http.StatusBadRequest, "vless-reality requires sni, private_key, public_key in settings")
 			return
 		}
+	default:
+		writeError(w, http.StatusBadRequest, "unsupported protocol")
+		return
 	}
 	ib, err := h.Store.CreateInbound(nodeID, req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, ib)
+	results := syncNodes(h.Sync, []int{nodeID})
+	if err := syncFailure(results); err != nil {
+		if rollbackErr := h.Store.DeleteInbound(ib.ID); rollbackErr != nil {
+			writeError(w, http.StatusInternalServerError, "node sync failed and inbound rollback failed: "+rollbackErr.Error())
+			return
+		}
+		restoreResults := syncNodes(h.Sync, []int{nodeID})
+		if restoreErr := syncFailure(restoreResults); restoreErr != nil {
+			writeError(w, http.StatusBadGateway, "inbound creation was rolled back, but restoring the node failed: "+restoreErr.Error())
+			return
+		}
+		writeError(w, http.StatusBadGateway, "inbound was not created: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, inboundSyncResponse{NodeInbound: ib, Sync: results})
 }
 
 func (h *NodeHandler) deleteInbound(w http.ResponseWriter, r *http.Request) {
@@ -179,11 +267,46 @@ func (h *NodeHandler) deleteInbound(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
+	inbound, err := h.Store.GetInbound(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "inbound not found")
+		return
+	}
+	node, err := h.Store.Get(inbound.NodeID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if node.ProxyType != "singbox" {
+		writeError(w, http.StatusBadRequest, "inbound synchronization is only supported for singbox nodes")
+		return
+	}
 	if err := h.Store.DeleteInbound(id); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	results := syncNodes(h.Sync, []int{inbound.NodeID})
+	if err := syncFailure(results); err != nil {
+		_, restoreErr := h.Store.RestoreInbound(*inbound)
+		if restoreErr != nil {
+			writeError(w, http.StatusInternalServerError, "delete sync failed and database restore failed: "+restoreErr.Error())
+			return
+		}
+		restoreResults := syncNodes(h.Sync, []int{inbound.NodeID})
+		if restoreErr := syncFailure(restoreResults); restoreErr != nil {
+			writeError(w, http.StatusBadGateway, "inbound deletion was rolled back, but restoring the node failed: "+restoreErr.Error())
+			return
+		}
+		writeError(w, http.StatusBadGateway, "inbound deletion was rolled back: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "deleted",
+		"inbound": map[string]any{
+			"id": inbound.ID, "protocol": inbound.Protocol, "port": inbound.Port,
+		},
+		"sync": results,
+	})
 }
 
 func (h *NodeHandler) Reorder(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +319,10 @@ func (h *NodeHandler) Reorder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	h.Store.ReorderNodes(items)
+	if err := h.Store.ReorderNodes(items); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -210,6 +336,51 @@ func (h *NodeHandler) ReorderInbounds(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	h.Store.ReorderInbounds(items)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	nodeID := parseID(r.URL.Path, "/api/nodes/")
+	if nodeID == 0 {
+		writeError(w, http.StatusBadRequest, "invalid node id")
+		return
+	}
+	node, err := h.Store.Get(nodeID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if node.ProxyType != "singbox" {
+		writeError(w, http.StatusBadRequest, "inbound synchronization is only supported for singbox nodes")
+		return
+	}
+	before, err := h.Store.ListInbounds(nodeID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := h.Store.ReorderInbounds(nodeID, items); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	results := syncNodes(h.Sync, []int{nodeID})
+	if err := syncFailure(results); err != nil {
+		rollback := make([]model.ReorderItem, 0, len(before))
+		for _, inbound := range before {
+			rollback = append(rollback, model.ReorderItem{ID: inbound.ID, SortOrder: inbound.SortOrder})
+		}
+		if rollbackErr := h.Store.ReorderInbounds(nodeID, rollback); rollbackErr != nil {
+			writeError(w, http.StatusInternalServerError, "node sync failed and inbound order rollback failed: "+rollbackErr.Error())
+			return
+		}
+		restoreResults := syncNodes(h.Sync, []int{nodeID})
+		if restoreErr := syncFailure(restoreResults); restoreErr != nil {
+			writeError(w, http.StatusBadGateway, "inbound reorder was rolled back, but restoring the node failed: "+restoreErr.Error())
+			return
+		}
+		writeError(w, http.StatusBadGateway, "inbound reorder was rolled back: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "sync": results})
+}
+
+type inboundSyncResponse struct {
+	*model.NodeInbound
+	Sync []NodeSyncResult `json:"sync"`
 }

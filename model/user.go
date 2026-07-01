@@ -135,7 +135,22 @@ type UpdateUserReq struct {
 }
 
 func (s *UserStore) Update(id int, req UpdateUserReq) (*User, error) {
-	if err := applyUserUpdate(s.DB, id, req); err != nil {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if err := applyUserUpdate(tx, id, req); err != nil {
+		return nil, err
+	}
+	var exists int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM users WHERE id = ?`, id).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if exists == 0 {
+		return nil, sql.ErrNoRows
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return s.Get(id)
@@ -223,6 +238,32 @@ func (s *UserStore) Delete(id int) error {
 	return err
 }
 
+func (s *UserStore) DeleteWithRelatedData(id int) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM user_access WHERE user_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM traffic_logs WHERE user_id = ?`, id); err != nil {
+		return err
+	}
+	result, err := tx.Exec(`DELETE FROM users WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if deleted != 1 {
+		return sql.ErrNoRows
+	}
+	return tx.Commit()
+}
+
 func (s *UserStore) ListEnabled() ([]User, error) {
 	rows, err := s.DB.Query(`SELECT id, name, uuid, sub_token, enabled, traffic_limit_bytes, traffic_used_bytes, COALESCE(traffic_up_bytes,0), COALESCE(traffic_down_bytes,0), COALESCE(traffic_reset_day,0), COALESCE(traffic_last_reset,''), expire_at, created_at, updated_at FROM users WHERE enabled = 1 AND (expire_at = '' OR expire_at > datetime('now')) ORDER BY id`)
 	if err != nil {
@@ -248,6 +289,12 @@ func (s *UserStore) AddTraffic(userID int, up, down int64) {
 
 func (s *UserStore) ResetTraffic(userID int) error {
 	_, err := s.DB.Exec(`UPDATE users SET traffic_used_bytes = 0, traffic_up_bytes = 0, traffic_down_bytes = 0, updated_at = datetime('now') WHERE id = ?`, userID)
+	return err
+}
+
+func (s *UserStore) RestoreTraffic(user User) error {
+	_, err := s.DB.Exec(`UPDATE users SET traffic_used_bytes = ?, traffic_up_bytes = ?, traffic_down_bytes = ?, traffic_last_reset = ?, updated_at = datetime('now') WHERE id = ?`,
+		user.TrafficUsedBytes, user.TrafficUpBytes, user.TrafficDownBytes, user.TrafficLastReset, user.ID)
 	return err
 }
 

@@ -1,6 +1,10 @@
 package handler
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 type NodeSynchronizer interface {
 	SyncNodes(nodeIDs []int) []NodeSyncResult
@@ -48,8 +52,36 @@ func changedIDs(before, after []int) []int {
 }
 
 func syncNodes(syncer NodeSynchronizer, nodeIDs []int) []NodeSyncResult {
-	if syncer == nil || len(nodeIDs) == 0 {
+	if len(nodeIDs) == 0 {
 		return []NodeSyncResult{}
 	}
+	if syncer == nil {
+		results := make([]NodeSyncResult, 0, len(nodeIDs))
+		for _, nodeID := range uniqueNodeIDs(nodeIDs) {
+			results = append(results, NodeSyncResult{NodeID: nodeID, Status: "error", Error: "node synchronizer is not configured"})
+		}
+		return results
+	}
 	return syncer.SyncNodes(nodeIDs)
+}
+
+func syncFailure(results []NodeSyncResult) error {
+	var failures []string
+	for _, result := range results {
+		if result.Status != "pushed" {
+			node := result.Node
+			if node == "" {
+				node = fmt.Sprintf("#%d", result.NodeID)
+			}
+			detail := result.Error
+			if detail == "" {
+				detail = "unexpected sync status: " + result.Status
+			}
+			failures = append(failures, node+": "+detail)
+		}
+	}
+	if len(failures) == 0 {
+		return nil
+	}
+	return fmt.Errorf("node sync failed: %s", strings.Join(failures, "; "))
 }
