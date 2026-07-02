@@ -256,6 +256,13 @@
                             :class="ib.protocol==='hysteria2'?'bg-purple-100 text-purple-700':ib.protocol==='vless-reality'?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'"
                             x-text="ib.protocol"></span>
                       <span class="text-gray-700 font-mono" x-text="':'+ib.port"></span>
+                      <template x-if="inboundStatus(n.id,ib.id)">
+                        <span class="inline-flex items-center gap-1 text-[10px]"
+                              :class="inboundStatus(n.id,ib.id).listening===true?'text-emerald-600':inboundStatus(n.id,ib.id).listening===false?'text-red-500':'text-gray-400'">
+                          <span class="w-1.5 h-1.5 rounded-full" :class="inboundStatus(n.id,ib.id).listening===true?'bg-emerald-500':inboundStatus(n.id,ib.id).listening===false?'bg-red-400':'bg-gray-300'"></span>
+                          <span x-text="inboundStatus(n.id,ib.id).listening===true?(lang==='zh'?'监听中':'listening'):inboundStatus(n.id,ib.id).listening===false?(lang==='zh'?'未监听':'not listening'):(lang==='zh'?'未知':'unknown')"></span>
+                        </span>
+                      </template>
                       <span class="text-gray-400" x-text="ib.tag"></span>
                       <div class="ml-auto flex items-center gap-1">
                         <button @click.stop="moveInbound(n,ib,-1)" class="text-gray-300 hover:text-gray-600 px-0.5">▲</button>
@@ -529,9 +536,30 @@
       <p class="text-xs text-gray-400 mb-4" x-text="autoSetupNode?autoSetupNode.name:''"></p>
       <div class="space-y-3">
         <div>
+          <label class="text-xs text-gray-500 mb-1 block" x-text="lang==='zh'?'部署模式':'Deployment mode'"></label>
+          <select x-model="autoSetupMode" @change="refreshSetupAssessment(true)" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500">
+            <option value="auto" x-text="lang==='zh'?'自动检测（仅可靠时选择）':'Auto detect (only when conclusive)'"></option>
+            <option value="direct" x-text="lang==='zh'?'域名直连节点':'Domain points directly to node'"></option>
+            <option value="cdn" x-text="lang==='zh'?'CDN / 反向代理':'CDN / reverse proxy'"></option>
+            <option value="reality" x-text="lang==='zh'?'仅 Reality（无需域名）':'Reality only (no domain required)'"></option>
+          </select>
+        </div>
+        <div>
           <label class="text-xs text-gray-500 mb-1 block" x-text="T('domain')"></label>
-          <input x-model="autoSetupDomain" :placeholder="T('domainOptional')" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400">
+          <input x-model="autoSetupDomain" @change="refreshSetupAssessment(true)" :placeholder="T('domainOptional')" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400">
           <p class="text-[11px] text-gray-400 mt-1" x-text="T('autoSetupDomainHint')"></p>
+        </div>
+        <div x-show="autoSetupAssessment||autoSetupAssessmentError" class="rounded-lg border px-3 py-2 text-[11px]"
+             :class="autoSetupAssessment?.requires_confirmation||autoSetupAssessmentError?'border-amber-200 bg-amber-50 text-amber-700':'border-emerald-200 bg-emerald-50 text-emerald-700'">
+          <div x-show="assessmentLoading" x-text="lang==='zh'?'检测中…':'Assessing…'"></div>
+          <div x-show="!assessmentLoading&&autoSetupAssessment">
+            <span x-text="autoSetupAssessment?.dns_status==='not_required'?(lang==='zh'?'无需 DNS 检测':'DNS not required'):(autoSetupAssessment?.direct_to_node?(lang==='zh'?'DNS 直连节点':'DNS points to node'):(lang==='zh'?'DNS 未直连节点':'DNS does not point to node'))"></span>
+            <span x-show="autoSetupAssessment?.dns_records?.length" class="ml-1 font-mono" x-text="'('+autoSetupAssessment.dns_records.join(', ')+')'"></span>
+          </div>
+          <div x-show="!assessmentLoading&&autoSetupAssessmentError" x-text="autoSetupAssessmentError"></div>
+          <template x-for="warning in autoSetupAssessment?.warnings||[]" :key="warning">
+            <div class="mt-1" x-text="warning"></div>
+          </template>
         </div>
         <div>
           <label class="text-xs text-gray-500 mb-1.5 block" x-text="T('protocols')"></label>
@@ -594,7 +622,7 @@ const I18N={
     setupSSH:'Setup SSH',install:'Install',autoSetup:'Auto Setup',checkStatus:'Status',rawConfig:'Raw Config',
     rootPassword:'Root password',sshHint:'Inject panel SSH key to the node for key-based auth',confirm:'Confirm',working:'Working...',
     domain:'Domain',protocols:'Protocols',needsDomain:'needs domain',noDomain:'no domain needed',forCDN:'for CDN/blocked IP',
-    autoSetupDomainHint:'Leave empty to use node domain. With domain: Hy2+Reality. Without: Reality only.',
+    autoSetupDomainHint:'Auto mode selects direct deployment only when DNS points to the node; CDN mode requires explicit confirmation.',
     startSetup:'Start Setup',notInstalled:'not installed',
     register:'Register',myInfo:'My Info',myNodes:'My Nodes',noNodes:'No accessible nodes',copy:'Copy',copied:'Copied',
     regSuccess:'Registered! Waiting for admin approval.',invalidCreds:'Invalid credentials',notApproved:'Account not yet approved'},
@@ -607,7 +635,7 @@ const I18N={
     setupSSH:'配置SSH',install:'安装',autoSetup:'一键配置',checkStatus:'检测状态',rawConfig:'原始配置',
     rootPassword:'Root密码',sshHint:'注入面板SSH公钥到节点，实现免密连接',confirm:'确认',working:'执行中...',
     domain:'域名',protocols:'协议',needsDomain:'需要域名',noDomain:'无需域名',forCDN:'CDN/被墙IP使用',
-    autoSetupDomainHint:'留空使用节点域名。有域名→Hy2+Reality，无域名→仅Reality',
+    autoSetupDomainHint:'自动模式仅在 DNS 明确直连节点时选择直连部署；CDN 模式必须显式确认。',
     startSetup:'开始配置',notInstalled:'未安装',
     register:'注册',myInfo:'我的信息',myNodes:'我的节点',noNodes:'暂无可用节点',copy:'复制',copied:'已复制',
     regSuccess:'注册成功，等待管理员审核',invalidCreds:'用户名或密码错误',notApproved:'账号待审核'}
@@ -633,7 +661,8 @@ function app(){return{
   newNode:{name:'',host:'',domain:'',port:22,ssh_user:'root'},
   expandedNodes:{},nodeDetails:{},nodeStatuses:{},
   showSSHSetup:false,sshNode:null,sshPassword:'',
-  showAutoSetup:false,autoSetupNode:null,autoSetupDomain:'',autoSetupProtos:[],
+  showAutoSetup:false,autoSetupNode:null,autoSetupDomain:'',autoSetupMode:'auto',autoSetupProtos:[],
+  autoSetupAssessment:null,autoSetupAssessmentError:'',assessmentLoading:false,autoSetupHasExisting:false,
   showRawCfg:false,rawCfgNode:null,rawCfgContent:'',
   opLoading:false,
 
@@ -842,8 +871,14 @@ function app(){return{
       // Client-side ping: measure TCP connect time to node
       s.ping_ms = await this.pingNode(n);
       this.nodeStatuses[n.id]=s;
-      this.toast(n.name+': '+(s.running?'running':'stopped')+' '+(s.version||'')+' ping='+s.ping_ms+'ms');
+      const unhealthy=(s.inbounds||[]).filter(x=>x.listening===false);
+      this.toast(n.name+': '+(s.running?'running':'stopped')+' '+(s.version||'')+' ping='+s.ping_ms+'ms'
+        +(unhealthy.length?(this.lang==='zh'?`，${unhealthy.length} 个入站未监听`:`; ${unhealthy.length} inbound(s) not listening`):''),
+        unhealthy.length?'error':'success');
     }catch(e){this.toast(e.message,'error')}
+  },
+  inboundStatus(nodeId,inboundId){
+    return (this.nodeStatuses[nodeId]?.inbounds||[]).find(x=>Number(x.id)===Number(inboundId))||null;
   },
   async pingNode(n){
     const target = n.domain || n.host;
@@ -876,19 +911,45 @@ function app(){return{
   },
   async showAutoSetupModal(n){
     this.autoSetupNode=n;this.autoSetupDomain=n.domain||'';
+    this.autoSetupAssessment=null;this.autoSetupAssessmentError='';
     try{
       const detail=this.nodeDetails[n.id]||await this.api('/api/nodes/'+n.id);
       const existing=[...new Set((detail.inbounds||[]).map(ib=>ib.protocol))];
+      this.autoSetupHasExisting=existing.length>0;
+      this.autoSetupMode=existing.includes('vless-httpupgrade')?'cdn':existing.includes('hysteria2')?'direct':existing.length?'reality':'auto';
       this.autoSetupProtos=existing.length?existing:(n.domain?['hysteria2','vless-reality']:['vless-reality']);
+      await this.refreshSetupAssessment(!existing.length);
     }catch(e){
       this.toast(e.message,'error');return;
     }
     this.showAutoSetup=true;
   },
+  async refreshSetupAssessment(applySuggestion=false){
+    if(!this.autoSetupNode)return;
+    this.assessmentLoading=true;this.autoSetupAssessmentError='';
+    try{
+      const query='?mode='+encodeURIComponent(this.autoSetupMode)+'&domain='+encodeURIComponent(this.autoSetupDomain||'');
+      const response=await this.api('/api/nodes/'+this.autoSetupNode.id+'/setup-assessment'+query);
+      this.autoSetupAssessment=response.assessment||response;
+      this.autoSetupAssessmentError=response.error||'';
+      if(applySuggestion&&!this.autoSetupHasExisting&&this.autoSetupAssessment?.suggested_protocols?.length){
+        this.autoSetupProtos=[...this.autoSetupAssessment.suggested_protocols];
+      }
+    }catch(e){
+      this.autoSetupAssessment=null;this.autoSetupAssessmentError=e.message;
+    }finally{this.assessmentLoading=false}
+  },
   async doAutoSetup(){
+    if(this.autoSetupMode==='auto'&&this.autoSetupAssessment?.requires_confirmation){
+      this.toast(this.lang==='zh'?'自动检测无法确认 CDN，请明确选择部署模式':'Auto detection cannot confirm CDN; choose a deployment mode explicitly','error');
+      return;
+    }
+    if(this.autoSetupAssessmentError){
+      this.toast(this.autoSetupAssessmentError,'error');return;
+    }
     this.opLoading=true;
     try{
-      const body={domain:this.autoSetupDomain};
+      const body={domain:this.autoSetupDomain,mode:this.autoSetupMode};
       if(this.autoSetupProtos.length)body.protocols=this.autoSetupProtos;
       const r=await this.api('/api/nodes/'+this.autoSetupNode.id+'/auto-setup',{method:'POST',body:JSON.stringify(body)});
       const changed=(r.inbounds||[]).filter(x=>x.status==='ok'||x.status==='updated').length;

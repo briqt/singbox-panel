@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -82,6 +84,28 @@ func (h *NodeOpsHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 	// Check service status
 	svcOut, _ := sshRun(client, "systemctl is-active sing-box 2>/dev/null")
 	running := strings.TrimSpace(svcOut) == "active"
+	socketOut, socketErr := sshRun(client, "ss -H -lntu 2>/dev/null")
+	listeningSockets := parseListeningSockets(socketOut)
+	inbounds, err := h.Nodes.ListInbounds(node.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	inboundStatuses := make([]map[string]any, 0, len(inbounds))
+	for _, inbound := range inbounds {
+		network := "tcp"
+		if inbound.Protocol == "hysteria2" {
+			network = "udp"
+		}
+		var listening any
+		if socketErr == nil {
+			listening = listeningSockets[network][inbound.Port]
+		}
+		inboundStatuses = append(inboundStatuses, map[string]any{
+			"id": inbound.ID, "protocol": inbound.Protocol, "port": inbound.Port, "network": network,
+			"listening": listening,
+		})
+	}
 
 	// System info: memory + disk
 	sysOut, _ := sshRun(client, `printf '{"mem_total":%s,"mem_available":%s,"disk_total":%s,"disk_used":%s,"uptime":%s}' \
@@ -99,6 +123,10 @@ func (h *NodeOpsHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 		"version":   strings.TrimSpace(verOut),
 		"running":   running,
 		"ssh_ms":    pingMs,
+		"inbounds":  inboundStatuses,
+	}
+	if socketErr != nil {
+		result["listener_check_error"] = "ss command unavailable or failed"
 	}
 	if sysInfo != nil {
 		result["mem_total"] = sysInfo["mem_total"]
@@ -108,6 +136,38 @@ func (h *NodeOpsHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 		result["uptime"] = sysInfo["uptime"]
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+var socketPortPattern = regexp.MustCompile(`:([0-9]+)$`)
+
+func parseListeningSockets(output string) map[string]map[int]bool {
+	result := map[string]map[int]bool{"tcp": {}, "udp": {}}
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		network := strings.ToLower(fields[0])
+		if strings.HasPrefix(network, "tcp") {
+			network = "tcp"
+		} else if strings.HasPrefix(network, "udp") {
+			network = "udp"
+		} else {
+			continue
+		}
+		for _, field := range fields[1:] {
+			match := socketPortPattern.FindStringSubmatch(field)
+			if len(match) != 2 {
+				continue
+			}
+			port, err := strconv.Atoi(match[1])
+			if err == nil && port > 0 {
+				result[network][port] = true
+				break
+			}
+		}
+	}
+	return result
 }
 
 type InstallReq struct {
