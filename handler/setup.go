@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/briqt/singbox-panel/model"
@@ -22,6 +23,7 @@ type SetupHandler struct {
 
 type AutoSetupReq struct {
 	Domain    string   `json:"domain"`
+	Mode      string   `json:"mode"`
 	Protocols []string `json:"protocols"`
 	Ports     struct {
 		Hysteria2   int `json:"hysteria2"`
@@ -75,20 +77,16 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Default protocols based on domain + DNS conditions
-	if len(req.Protocols) == 0 {
-		if domain != "" {
-			// Check if domain resolves to node's real IP (DNS-only) or CF proxy
-			if isDNSDirect(domain, node.Host) {
-				req.Protocols = []string{"hysteria2", "vless-reality"}
-			} else {
-				// CF proxied or DNS mismatch → use HTTPUpgrade (CDN) + Reality (IP direct)
-				req.Protocols = []string{"vless-httpupgrade", "vless-reality"}
-			}
-		} else {
-			req.Protocols = []string{"vless-reality"}
+	protocols, assessment, err := suggestedProtocolsForRequest(req, node)
+	if err != nil {
+		status := http.StatusBadRequest
+		if assessment != nil {
+			status = http.StatusUnprocessableEntity
 		}
+		writeJSON(w, status, map[string]any{"error": err.Error(), "assessment": assessment})
+		return
 	}
+	req.Protocols = protocols
 	seenProtocols := make(map[string]bool, len(req.Protocols))
 	for _, protocol := range req.Protocols {
 		if seenProtocols[protocol] {
@@ -312,8 +310,14 @@ test -f %s && test -f %s && echo "CERT_OK"
 			if shortID == "" {
 				shortID = randomHex(8)
 			}
-			// Pick a random mainstream SNI for disguise
-			sni := realitySNIs[randomPort()%len(realitySNIs)]
+			sni, probeErr := selectRealitySNI(func(command string) (string, error) {
+				return sshRun(client, command)
+			})
+			if probeErr != nil {
+				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: probeErr.Error()})
+				hadError = true
+				continue
+			}
 			settings := mustMarshal(map[string]any{
 				"sni": sni, "private_key": privateKey, "public_key": publicKey,
 				"short_id": shortID, "handshake_server": sni, "handshake_port": 443,
@@ -326,7 +330,9 @@ test -f %s && test -f %s && echo "CERT_OK"
 				continue
 			}
 			createdInboundIDs = append(createdInboundIDs, inbound.ID)
-			results = append(results, inboundResult{Protocol: proto, Port: port, Status: "ok", Details: map[string]string{"public_key": publicKey, "short_id": shortID}})
+			results = append(results, inboundResult{Protocol: proto, Port: port, Status: "ok", Details: map[string]string{
+				"public_key": publicKey, "short_id": shortID, "sni": sni,
+			}})
 
 		case "vless-httpupgrade":
 			if domain == "" {
@@ -444,7 +450,9 @@ test -f %s && test -f %s && echo "CERT_OK"
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"inbounds": results, "push": "ok", "sync": syncResults, "node": node.Name})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"inbounds": results, "push": "ok", "sync": syncResults, "node": node.Name, "assessment": assessment,
+	})
 }
 
 func randomPort() int {
@@ -456,6 +464,49 @@ func randomHex(bytes int) string {
 	b := make([]byte, bytes)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+type commandRunner func(command string) (string, error)
+
+func selectRealitySNI(run commandRunner) (string, error) {
+	var script strings.Builder
+	for _, host := range realitySNIs {
+		fmt.Fprintf(&script, "(metric=$(curl -sS -o /dev/null --connect-timeout 3 --max-time 5 --tlsv1.3 --tls-max 1.3 -w '%%{time_appconnect}' 'https://%s/' 2>/dev/null) && printf '%s %%s\\n' \"$metric\") &\n", host, host)
+	}
+	script.WriteString("wait\n")
+	out, err := run(script.String())
+	if err != nil && strings.TrimSpace(out) == "" {
+		return "", fmt.Errorf("unable to probe Reality handshake targets")
+	}
+	host, _ := parseFastestRealityProbe(out)
+	if host == "" {
+		return "", fmt.Errorf("no Reality handshake target completed a TLS 1.3 probe")
+	}
+	return host, nil
+}
+
+func parseFastestRealityProbe(output string) (string, float64) {
+	allowed := make(map[string]bool, len(realitySNIs))
+	for _, host := range realitySNIs {
+		allowed[host] = true
+	}
+	bestHost := ""
+	bestLatency := 0.0
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || !allowed[fields[0]] {
+			continue
+		}
+		latency, err := strconv.ParseFloat(fields[1], 64)
+		if err != nil || latency <= 0 {
+			continue
+		}
+		if bestHost == "" || latency < bestLatency {
+			bestHost = fields[0]
+			bestLatency = latency
+		}
+	}
+	return bestHost, bestLatency
 }
 
 func parseKeypair(output string) (privateKey, publicKey string) {
@@ -489,17 +540,4 @@ func contains(s, sub string) bool {
 func mustMarshal(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b
-}
-
-func isDNSDirect(domain, nodeHost string) bool {
-	ips, err := net.LookupHost(domain)
-	if err != nil {
-		return false
-	}
-	for _, ip := range ips {
-		if ip == nodeHost {
-			return true
-		}
-	}
-	return false
 }

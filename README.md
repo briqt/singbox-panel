@@ -6,8 +6,8 @@ Personal sing-box proxy node management panel. Full lifecycle: create node → S
 
 | Protocol | Use Case | Requires Domain | Notes |
 |----------|----------|----------------|-------|
-| Hysteria2 | High speed | Yes | UDP/QUIC, fastest |
-| VLESS Reality | Anti-censorship | No | TCP, disguises as mainstream sites |
+| Hysteria2 | High speed | Yes | UDP/QUIC, adaptive congestion control |
+| VLESS Reality | Domainless fallback | No | TCP, handshake target is probed from the node |
 | VLESS HTTPUpgrade | CDN relay | Yes | For blocked IPs / IPv6-only nodes |
 
 ## Features
@@ -73,14 +73,22 @@ Environment variables (or `.env` file in working directory):
 1. Create node          POST /api/nodes
 2. Setup SSH            POST /api/nodes/{id}/setup-ssh
 3. Install sing-box     POST /api/nodes/{id}/install
-4. Auto-setup protocols POST /api/nodes/{id}/auto-setup
-5. Done — node is live, users can connect via subscription
+4. Assess the deployment mode with `GET /api/nodes/{id}/setup-assessment`
+5. Auto-setup protocols with `POST /api/nodes/{id}/auto-setup`
+6. Done — node is live, users can connect via subscription
 ```
 
 Auto-setup logic:
-- Has domain → Hysteria2 + VLESS Reality (default)
-- No domain → VLESS Reality only
+- `auto` — chooses direct mode only when DNS resolves to the node; a possible
+  CDN requires explicit confirmation
+- `direct` — Hysteria2 + VLESS Reality, and DNS must resolve to the node
+- `cdn` — VLESS HTTPUpgrade + VLESS Reality
+- `reality` — VLESS Reality only; no domain required
 - Manual override via `protocols` field
+
+Reality handshake targets are tested from the node and the fastest TLS 1.3
+candidate is selected. Existing Reality credentials and handshake settings are
+preserved during repeat setup.
 
 ## API
 
@@ -120,11 +128,12 @@ domain edits are rejected so certificate paths and inbound settings cannot
 become stale.
 
 ### Node Operations
-- `GET /api/nodes/{id}/status` — SSH reachability + sing-box status
+- `GET /api/nodes/{id}/status` — SSH reachability, sing-box status, and per-inbound TCP/UDP listeners
 - `GET /api/nodes/{id}/version` — sing-box version
 - `POST /api/nodes/{id}/setup-ssh` — inject panel SSH key via password
 - `POST /api/nodes/{id}/install` — install/upgrade sing-box
-- `POST /api/nodes/{id}/auto-setup` — idempotent protocol setup and domain migration
+- `GET /api/nodes/{id}/setup-assessment?mode=auto&domain=X` — explain DNS and deployment-mode inference
+- `POST /api/nodes/{id}/auto-setup` — idempotent protocol setup and domain migration (`mode`: `auto`, `direct`, `cdn`, or `reality`)
 - `POST /api/nodes/{id}/cert` — issue TLS certificate
 
 ### Config

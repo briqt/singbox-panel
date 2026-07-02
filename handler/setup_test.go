@@ -35,3 +35,25 @@ func TestAutoSetupRejectsInvalidRequestsBeforeSSH(t *testing.T) {
 		})
 	}
 }
+
+func TestParseFastestRealityProbe(t *testing.T) {
+	host, latency := parseFastestRealityProbe("attacker.invalid 0.001\nwww.apple.com 0.083\ninvalid\nwww.microsoft.com 0.041\nwww.amazon.com 0.122\n")
+	if host != "www.microsoft.com" || latency != 0.041 {
+		t.Fatalf("host=%q latency=%v", host, latency)
+	}
+}
+
+func TestSelectRealitySNIUsesSuccessfulFastestProbe(t *testing.T) {
+	host, err := selectRealitySNI(func(command string) (string, error) {
+		if command == "" {
+			t.Fatal("probe command is empty")
+		}
+		return "www.apple.com 0.090\nwww.mozilla.org 0.052\n", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "www.mozilla.org" {
+		t.Fatalf("host=%q", host)
+	}
+}
