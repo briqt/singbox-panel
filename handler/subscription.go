@@ -17,6 +17,8 @@ type SubscriptionHandler struct {
 	Access *model.AccessStore
 }
 
+const unlimitedSubscriptionTotalBytes int64 = 1 << 50 // 1 PiB display placeholder
+
 func (h *SubscriptionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimPrefix(r.URL.Path, "/sub/")
 	if token == "" {
@@ -67,7 +69,7 @@ func (h *SubscriptionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	download := user.TrafficDownBytes
 	total := user.TrafficLimitBytes
 	if total == 0 {
-		total = 1099511627776 // 1TB placeholder for unlimited
+		total = unlimitedSubscriptionTotalBytes
 	}
 	userinfo := fmt.Sprintf("upload=%d; download=%d; total=%d", upload, download, total)
 	if user.ExpireAt != "" {
