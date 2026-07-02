@@ -68,9 +68,7 @@ func (h *NodeOpsHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	start := time.Now()
 	client, err := h.Config.sshConnect(node)
-	pingMs := time.Since(start).Milliseconds()
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"node": node.Name, "reachable": false, "error": err.Error()})
 		return
@@ -122,7 +120,6 @@ func (h *NodeOpsHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 		"installed": installed,
 		"version":   strings.TrimSpace(verOut),
 		"running":   running,
-		"ssh_ms":    pingMs,
 		"inbounds":  inboundStatuses,
 	}
 	if socketErr != nil {

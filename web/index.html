@@ -192,9 +192,17 @@
 
   <!-- Nodes Tab -->
   <div x-show="tab==='nodes'">
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold text-gray-900" x-text="T('nodes')"></h2>
-      <div class="flex items-center gap-2">
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+      <div class="flex items-center gap-3">
+        <h2 class="text-lg font-semibold text-gray-900" x-text="T('nodes')"></h2>
+        <span class="text-xs text-gray-400" x-text="nodeStatusOverview()"></span>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <button @click="loadNodeStatuses(true)" :disabled="nodesStatusLoading"
+                class="px-3 py-1.5 border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 text-xs rounded-lg transition disabled:opacity-50 flex items-center gap-1.5">
+          <span :class="nodesStatusLoading?'spin':''">↻</span>
+          <span x-text="lang==='zh'?'刷新状态':'Refresh status'"></span>
+        </button>
         <button @click="showCreateNode=true" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition" x-text="'+ '+T('newNode')"></button>
         <button @click="pushAll()" class="px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs rounded-lg transition" x-text="T('pushAll')"></button>
       </div>
@@ -212,13 +220,17 @@
             <div class="flex items-center gap-1">
               <button @click.stop="moveNode(n,-1)" class="text-gray-300 hover:text-gray-600 text-xs px-1" title="Move up">▲</button>
               <button @click.stop="moveNode(n,1)" class="text-gray-300 hover:text-gray-600 text-xs px-1" title="Move down">▼</button>
-              <template x-if="nodeStatuses[n.id]">
-                <div class="flex items-center gap-1.5 mr-2">
-                  <span :class="nodeStatuses[n.id].running?'bg-emerald-500':'bg-yellow-400'" class="w-1.5 h-1.5 rounded-full"></span>
-                  <span class="text-[10px] text-gray-400" x-text="nodeStatuses[n.id].version||T('notInstalled')"></span>
-                  <span class="text-[10px] text-gray-400" x-text="nodeStatuses[n.id].ping_ms?nodeStatuses[n.id].ping_ms+'ms':''"></span>
-                </div>
-              </template>
+              <div class="mr-2 flex items-center gap-2">
+                <span x-show="nodeStatusLoading[n.id]" class="inline-flex items-center gap-1 text-[10px] text-gray-400">
+                  <span class="spin">↻</span><span x-text="lang==='zh'?'检测中':'checking'"></span>
+                </span>
+                <span x-show="!nodeStatusLoading[n.id]" class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium"
+                      :class="nodeHealthBadgeClass(n.id)">
+                  <span class="w-1.5 h-1.5 rounded-full" :class="nodeHealthDotClass(n.id)"></span>
+                  <span x-text="nodeHealthLabel(n.id)"></span>
+                </span>
+                <span x-show="nodeStatuses[n.id]?.version" class="text-[10px] text-gray-400" x-text="nodeStatuses[n.id]?.version"></span>
+              </div>
               <span class="text-gray-300 text-xs" x-text="expandedNodes[n.id]?'▾':'▸'"></span>
             </div>
           </div>
@@ -226,7 +238,11 @@
           <div x-show="expandedNodes[n.id]" class="border-t border-gray-100">
             <!-- Action Buttons -->
             <div class="px-4 py-3 bg-gray-50/80 flex flex-wrap items-center gap-2 border-b border-gray-100">
-              <button @click.stop="checkNodeStatus(n)" class="px-2.5 py-1.5 text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-md transition" x-text="T('checkStatus')"></button>
+              <button @click.stop="checkNodeStatus(n)" :disabled="nodeStatusLoading[n.id]"
+                      class="px-2.5 py-1.5 text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-md transition disabled:opacity-50 inline-flex items-center gap-1">
+                <span :class="nodeStatusLoading[n.id]?'spin':''">↻</span>
+                <span x-text="lang==='zh'?'刷新状态':'Refresh status'"></span>
+              </button>
               <button @click.stop="showSetupSSHModal(n)" class="px-2.5 py-1.5 text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-md transition" x-text="T('setupSSH')"></button>
               <button @click.stop="installSingbox(n)" class="px-2.5 py-1.5 text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-md transition" x-text="T('install')"></button>
               <button @click.stop="showAutoSetupModal(n)" class="px-2.5 py-1.5 text-xs border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-md transition font-medium" x-text="T('autoSetup')"></button>
@@ -239,10 +255,10 @@
             <!-- System Info -->
             <template x-if="nodeStatuses[n.id]&&nodeStatuses[n.id].reachable">
               <div class="px-4 py-2 bg-gray-50/50 border-b border-gray-100 flex flex-wrap gap-4 text-[11px] text-gray-500">
-                <span x-show="nodeStatuses[n.id].ping_ms"><span class="text-gray-400">Ping</span> <span class="font-mono" x-text="nodeStatuses[n.id].ping_ms+'ms'" :class="nodeStatuses[n.id].ping_ms<100?'text-emerald-600':nodeStatuses[n.id].ping_ms<300?'text-yellow-600':'text-red-500'"></span></span>
                 <span x-show="nodeStatuses[n.id].mem_total"><span class="text-gray-400">Mem</span> <span class="font-mono" x-text="fmtBytes(nodeStatuses[n.id].mem_total-nodeStatuses[n.id].mem_available)+' / '+fmtBytes(nodeStatuses[n.id].mem_total)"></span></span>
                 <span x-show="nodeStatuses[n.id].disk_total"><span class="text-gray-400">Disk</span> <span class="font-mono" x-text="fmtBytes(nodeStatuses[n.id].disk_used)+' / '+fmtBytes(nodeStatuses[n.id].disk_total)"></span></span>
                 <span x-show="nodeStatuses[n.id].uptime"><span class="text-gray-400">Up</span> <span class="font-mono" x-text="fmtUptime(nodeStatuses[n.id].uptime)"></span></span>
+                <span x-show="nodeStatuses[n.id].checked_at"><span class="text-gray-400" x-text="lang==='zh'?'检查于':'Checked'"></span> <span class="font-mono" x-text="fmtChecked(nodeStatuses[n.id].checked_at)"></span></span>
               </div>
             </template>
             <!-- Inbounds -->
@@ -611,6 +627,7 @@
 <script>
 function fmtBytes(b){if(!b||b===0)return'0 B';const u=['B','KB','MB','GB','TB'];const i=Math.floor(Math.log(b)/Math.log(1024));return(b/Math.pow(1024,i)).toFixed(i>0?2:0)+' '+u[i]}
 function fmtUptime(s){if(!s)return'';const d=Math.floor(s/86400),h=Math.floor(s%86400/3600);return d>0?d+'d '+h+'h':h+'h'}
+function fmtChecked(ts){return ts?new Date(ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}):''}
 
 const I18N={
   en:{overview:'Overview',users:'Users',nodes:'Nodes',stats:'Stats',signOut:'Sign out',signIn:'Sign In',loginHint:'Sign in to continue',
@@ -659,7 +676,7 @@ function app(){return{
   savingUser:false,
   showCreateNode:false,
   newNode:{name:'',host:'',domain:'',port:22,ssh_user:'root'},
-  expandedNodes:{},nodeDetails:{},nodeStatuses:{},
+  expandedNodes:{},nodeDetails:{},nodeStatuses:{},nodeStatusLoading:{},nodesStatusLoading:false,nodeStatusRun:0,
   showSSHSetup:false,sshNode:null,sshPassword:'',
   showAutoSetup:false,autoSetupNode:null,autoSetupDomain:'',autoSetupMode:'auto',autoSetupProtos:[],
   autoSetupAssessment:null,autoSetupAssessmentError:'',assessmentLoading:false,autoSetupHasExisting:false,
@@ -702,7 +719,11 @@ function app(){return{
     try{
       if(this.role==='admin'){
         if(this.tab==='dash'||this.tab==='users'){this.users=await this.api('/api/users')||[]}
-        if(this.tab==='dash'||this.tab==='nodes'){this.nodes=await this.api('/api/nodes')||[]}
+        if(this.tab==='dash'){this.nodes=await this.api('/api/nodes')||[]}
+        if(this.tab==='nodes'){
+          this.nodes=await this.api('/api/nodes')||[];
+          this.loadNodeStatuses(false);
+        }
         if(this.tab==='stats'){this.loadStats()}
       }
       if(this.tab==='myinfo'){
@@ -865,28 +886,98 @@ function app(){return{
     this.expandedNodes[n.id]=true;
     this.nodeDetails[n.id]=await this.api('/api/nodes/'+n.id);
   },
-  async checkNodeStatus(n){
-    try{
-      const s=await this.api('/api/nodes/'+n.id+'/status');
-      // Client-side ping: measure TCP connect time to node
-      s.ping_ms = await this.pingNode(n);
-      this.nodeStatuses[n.id]=s;
-      const unhealthy=(s.inbounds||[]).filter(x=>x.listening===false);
-      this.toast(n.name+': '+(s.running?'running':'stopped')+' '+(s.version||'')+' ping='+s.ping_ms+'ms'
-        +(unhealthy.length?(this.lang==='zh'?`，${unhealthy.length} 个入站未监听`:`; ${unhealthy.length} inbound(s) not listening`):''),
+  async loadNodeStatuses(notify=false){
+    const run=++this.nodeStatusRun;
+    const queue=[...this.nodes];
+    this.nodesStatusLoading=true;
+    const worker=async()=>{
+      while(queue.length&&run===this.nodeStatusRun){
+        const node=queue.shift();
+        await this.fetchNodeStatus(node,false,run);
+      }
+    };
+    const workers=Array.from({length:Math.min(3,queue.length)},()=>worker());
+    await Promise.all(workers);
+    if(run!==this.nodeStatusRun)return;
+    this.nodesStatusLoading=false;
+    if(notify){
+      const unhealthy=this.nodes.filter(n=>this.nodeHealthState(n.id)!=='healthy');
+      this.toast(unhealthy.length
+        ?(this.lang==='zh'?`状态已刷新，${unhealthy.length} 个节点需要关注`:`Status refreshed; ${unhealthy.length} node(s) need attention`)
+        :(this.lang==='zh'?'全部节点运行正常':'All nodes are healthy'),
         unhealthy.length?'error':'success');
-    }catch(e){this.toast(e.message,'error')}
+    }
+  },
+  async fetchNodeStatus(n,notify=false,run=null){
+    this.nodeStatusLoading={...this.nodeStatusLoading,[n.id]:true};
+    try{
+      const status=await this.api('/api/nodes/'+n.id+'/status');
+      if(run!==null&&run!==this.nodeStatusRun)return;
+      status.checked_at=Date.now();
+      this.nodeStatuses={...this.nodeStatuses,[n.id]:status};
+    }catch(e){
+      if(run!==null&&run!==this.nodeStatusRun)return;
+      this.nodeStatuses={...this.nodeStatuses,[n.id]:{
+        node:n.name,reachable:false,running:false,error:e.message,checked_at:Date.now()
+      }};
+    }finally{
+      if(run===null||run===this.nodeStatusRun){
+        this.nodeStatusLoading={...this.nodeStatusLoading,[n.id]:false};
+      }
+    }
+    if(notify){
+      const state=this.nodeHealthState(n.id);
+      this.toast(n.name+': '+this.nodeHealthLabel(n.id),state==='healthy'?'success':'error');
+    }
+  },
+  async checkNodeStatus(n){await this.fetchNodeStatus(n,true,null)},
+  nodeHealthState(nodeId){
+    const status=this.nodeStatuses[nodeId];
+    if(!status)return'unknown';
+    if(!status.reachable)return'offline';
+    if(!status.installed)return'missing';
+    if(!status.running)return'stopped';
+    const inbounds=status.inbounds||[];
+    if(inbounds.some(x=>x.listening===false))return'degraded';
+    if(inbounds.some(x=>x.listening==null))return'partial';
+    return'healthy';
+  },
+  nodeHealthLabel(nodeId){
+    const status=this.nodeStatuses[nodeId],state=this.nodeHealthState(nodeId);
+    if(state==='offline')return this.lang==='zh'?'SSH 不可达':'SSH unreachable';
+    if(state==='missing')return this.lang==='zh'?'未安装':'Not installed';
+    if(state==='stopped')return this.lang==='zh'?'服务停止':'Service stopped';
+    const inbounds=status?.inbounds||[];
+    const listening=inbounds.filter(x=>x.listening===true).length;
+    if(state==='degraded')return this.lang==='zh'?`入站异常 ${listening}/${inbounds.length}`:`Inbound issue ${listening}/${inbounds.length}`;
+    if(state==='partial')return this.lang==='zh'?'运行中 · 监听未知':'Running · listeners unknown';
+    if(state==='healthy')return inbounds.length
+      ?(this.lang==='zh'?`正常 ${listening}/${inbounds.length}`:`Healthy ${listening}/${inbounds.length}`)
+      :(this.lang==='zh'?'运行正常':'Healthy');
+    return this.lang==='zh'?'等待检测':'Pending';
+  },
+  nodeHealthBadgeClass(nodeId){
+    const state=this.nodeHealthState(nodeId);
+    if(state==='healthy')return'bg-emerald-50 text-emerald-700';
+    if(state==='degraded'||state==='offline'||state==='stopped')return'bg-red-50 text-red-600';
+    if(state==='missing'||state==='partial')return'bg-amber-50 text-amber-700';
+    return'bg-gray-100 text-gray-500';
+  },
+  nodeHealthDotClass(nodeId){
+    const state=this.nodeHealthState(nodeId);
+    if(state==='healthy')return'bg-emerald-500';
+    if(state==='degraded'||state==='offline'||state==='stopped')return'bg-red-500';
+    if(state==='missing'||state==='partial')return'bg-amber-400';
+    return'bg-gray-300';
+  },
+  nodeStatusOverview(){
+    if(!this.nodes.length)return'';
+    const healthy=this.nodes.filter(n=>this.nodeHealthState(n.id)==='healthy').length;
+    if(this.nodesStatusLoading)return this.lang==='zh'?'正在刷新节点状态…':'Refreshing node status…';
+    return this.lang==='zh'?`${healthy}/${this.nodes.length} 正常`:`${healthy}/${this.nodes.length} healthy`;
   },
   inboundStatus(nodeId,inboundId){
     return (this.nodeStatuses[nodeId]?.inbounds||[]).find(x=>Number(x.id)===Number(inboundId))||null;
-  },
-  async pingNode(n){
-    const target = n.domain || n.host;
-    const port = 443;
-    const url = 'https://'+target+':'+port;
-    const t0 = performance.now();
-    try{ await fetch(url,{mode:'no-cors',cache:'no-store',signal:AbortSignal.timeout(3000)}); }catch(_){}
-    return Math.round(performance.now()-t0);
   },
   showSetupSSHModal(n){this.sshNode=n;this.sshPassword='';this.showSSHSetup=true},
   async doSetupSSH(){
