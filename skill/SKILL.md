@@ -41,9 +41,10 @@ POST /api/nodes/{id}/install
 
 # 4. 一键配置协议（自动选择、生成密钥、签证书、推送、启动）
 POST /api/nodes/{id}/auto-setup
-{"domain":"node.example.com"}
-# 有域名 → Hysteria2 + Reality
-# 无域名 → Reality only
+{"domain":"node.example.com", "mode":"direct"}
+# direct → Hysteria2 + Reality
+# cdn → HTTPUpgrade + Reality
+# reality → Reality only
 # 也可手动指定: {"protocols":["hysteria2","vless-reality","vless-httpupgrade"]}
 ```
 
@@ -119,11 +120,12 @@ POST /api/users/{id}/reset-traffic
 - `DELETE /api/inbounds/{id}` — 删除协议并立即同步节点，失败回滚
 
 ### 节点运维
-- `GET /api/nodes/{id}/status` — SSH 连通性 + sing-box 状态
+- `GET /api/nodes/{id}/status` — SSH 连通性、sing-box 状态和各入站 TCP/UDP 监听状态
 - `GET /api/nodes/{id}/version` — sing-box 版本
 - `POST /api/nodes/{id}/setup-ssh` — 注入公钥 ({password})
 - `POST /api/nodes/{id}/install` — 安装/升级 sing-box ({version})
-- `POST /api/nodes/{id}/auto-setup` — 幂等配置和域名迁移 ({domain, protocols, ports})；存在域名协议时禁止直接修改节点域名
+- `GET /api/nodes/{id}/setup-assessment?mode=auto&domain=X` — 检测 DNS 并解释部署模式建议；不会仅凭 DNS 不一致认定为 CDN
+- `POST /api/nodes/{id}/auto-setup` — 幂等配置和域名迁移 ({domain, mode, protocols, ports})；mode 支持 auto/direct/cdn/reality
 - `POST /api/nodes/{id}/cert` — 签发证书 (?domain=)
 
 ### 配置

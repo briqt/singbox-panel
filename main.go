@@ -103,6 +103,8 @@ func main() {
 			validateHandler.HandleCertInstall(w, r)
 		} else if strings.HasSuffix(path, "/cert-upload") {
 			validateHandler.HandleCertUpload(w, r)
+		} else if strings.HasSuffix(path, "/setup-assessment") {
+			setupHandler.HandleSetupAssessment(w, r)
 		} else if strings.HasSuffix(path, "/auto-setup") {
 			setupHandler.HandleAutoSetup(w, r)
 		} else if strings.HasSuffix(path, "/inbounds/reorder") {

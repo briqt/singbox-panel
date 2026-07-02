@@ -48,7 +48,17 @@ func GenerateClashConfig(user model.User, nodes []model.NodeWithInbounds) string
 		sb.WriteString(fmt.Sprintf("      - %s\n", name))
 	}
 	sb.WriteString("    url: https://www.gstatic.com/generate_204\n    interval: 300\n")
-	sb.WriteString("\nrules:\n  - GEOIP,CN,DIRECT\n  - MATCH,Proxy\n")
+	sb.WriteString("\nrules:\n")
+	sb.WriteString("  - DOMAIN-SUFFIX,local,DIRECT\n")
+	sb.WriteString("  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve\n")
+	sb.WriteString("  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve\n")
+	sb.WriteString("  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve\n")
+	sb.WriteString("  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve\n")
+	sb.WriteString("  - IP-CIDR6,::1/128,DIRECT,no-resolve\n")
+	sb.WriteString("  - IP-CIDR6,fc00::/7,DIRECT,no-resolve\n")
+	sb.WriteString("  - IP-CIDR6,fe80::/10,DIRECT,no-resolve\n")
+	sb.WriteString("  - GEOIP,CN,DIRECT,no-resolve\n")
+	sb.WriteString("  - MATCH,Proxy\n")
 	return sb.String()
 }
 

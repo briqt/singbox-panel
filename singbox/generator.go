@@ -84,7 +84,6 @@ func buildHysteria2Inbound(users []model.User, ib model.NodeInbound, s map[strin
 	return map[string]any{
 		"type": "hysteria2", "tag": tag,
 		"listen": "::", "listen_port": ib.Port,
-		"up_mbps": 1000, "down_mbps": 1000,
 		"users": hy2Users,
 		"tls": map[string]any{
 			"enabled": true, "server_name": domain, "alpn": []string{"h3"},
