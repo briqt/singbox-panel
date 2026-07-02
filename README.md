@@ -16,6 +16,7 @@ Personal sing-box proxy node management panel. Full lifecycle: create node → S
 - **User management** — UUID-based auth, traffic limits, expiry, per-node access control
 - **Multi-format subscriptions** — base64 (v2rayN/Shadowrocket), Clash Meta YAML (auto-detect via User-Agent)
 - **Certificate management** — ACME via acme.sh with auto-renewal cron
+- **Node health overview** — automatically checks SSH reachability, service state, version, resources, and per-inbound listeners when the node page opens
 - **Admin Web UI** — i18n (zh/en), light theme, full node lifecycle controls
 - **SSH-based operations** — key injection, sing-box install/upgrade, config push with validation
 - **Traffic enforcement** — over-limit users excluded from sing-box config (connection refused)
