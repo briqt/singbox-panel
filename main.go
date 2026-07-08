@@ -99,8 +99,6 @@ func main() {
 			strings.HasSuffix(path, "/upgrade") || strings.HasSuffix(path, "/status") ||
 			strings.HasSuffix(path, "/setup-ssh") {
 			nodeOpsHandler.ServeHTTP(w, r)
-		} else if strings.HasSuffix(path, "/cert") {
-			validateHandler.HandleCertInstall(w, r)
 		} else if strings.HasSuffix(path, "/cert-upload") {
 			validateHandler.HandleCertUpload(w, r)
 		} else if strings.HasSuffix(path, "/setup-assessment") {
@@ -115,8 +113,7 @@ func main() {
 	}))
 	mux.HandleFunc("/api/inbounds/", admin(nodeHandler.ServeHTTP))
 
-	// Admin: validation, batch, stats
-	mux.HandleFunc("/api/validate/dns", admin(validateHandler.HandleDNSCheck))
+	// Admin: batch, stats
 	mux.HandleFunc("/api/batch/push-all", admin(batchHandler.PushAll))
 	mux.HandleFunc("/api/batch/template", admin(batchHandler.ApplyTemplate))
 	mux.HandleFunc("/api/stats/users", admin(configHandler.HandleUserStats))

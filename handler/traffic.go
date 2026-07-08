@@ -1,10 +1,7 @@
 package handler
 
 import (
-	"encoding/json"
-	"fmt"
 	"log"
-	"sync"
 	"time"
 
 	"github.com/briqt/singbox-panel/model"
@@ -14,14 +11,25 @@ type TrafficPoller struct {
 	Nodes  *model.NodeStore
 	Users  *model.UserStore
 	Config *ConfigHandler
-
-	mu       sync.Mutex
-	lastSeen map[string][2]int64 // nodeKey -> [lastUp, lastDown]
 }
 
+// trafficLogRetentionDays bounds how long per-poll traffic samples are kept.
+// It must be >= the stats history window (capped at 90 days) so nothing
+// queryable is lost.
+const trafficLogRetentionDays = 90
+
 func (p *TrafficPoller) Start() {
-	p.lastSeen = make(map[string][2]int64)
 	go p.loop()
+	go p.retentionLoop()
+}
+
+func (p *TrafficPoller) retentionLoop() {
+	for {
+		if n, err := p.Nodes.PruneTrafficLogs(trafficLogRetentionDays); err == nil && n > 0 {
+			log.Printf("traffic: pruned %d log rows older than %d days", n, trafficLogRetentionDays)
+		}
+		time.Sleep(24 * time.Hour)
+	}
 }
 
 func (p *TrafficPoller) loop() {
@@ -45,18 +53,11 @@ func (p *TrafficPoller) pollAll() {
 	}
 }
 
-type clashConnsResp struct {
-	UploadTotal   int64       `json:"uploadTotal"`
-	DownloadTotal int64       `json:"downloadTotal"`
-	Connections   []clashConn `json:"connections"`
-}
-
-type clashConn struct {
-	Upload   int64             `json:"upload"`
-	Download int64             `json:"download"`
-	Metadata map[string]string `json:"metadata"`
-}
-
+// pollNode reads exact per-user uplink/downlink counters from the node's
+// v2ray_api StatsService and attributes them to the matching user. Using
+// reset=true, each poll returns the delta since the previous poll, so no
+// baseline tracking is needed and a sing-box restart simply starts a fresh
+// counter from zero.
 func (p *TrafficPoller) pollNode(node model.Node) {
 	client, err := p.Config.sshConnect(&node)
 	if err != nil {
@@ -64,109 +65,30 @@ func (p *TrafficPoller) pollNode(node model.Node) {
 	}
 	defer client.Close()
 
-	out, err := sshRun(client, "curl -s http://127.0.0.1:9090/connections 2>/dev/null")
-	if err != nil || out == "" || out[0] != '{' {
+	stats, err := queryUserStats(client, true)
+	if err != nil || len(stats) == 0 {
 		return
 	}
 
-	var resp clashConnsResp
-	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+	users, err := p.Users.List()
+	if err != nil {
 		return
 	}
-
-	nodeKey := fmt.Sprintf("node_%d", node.ID)
-	p.mu.Lock()
-	prev := p.lastSeen[nodeKey]
-	p.lastSeen[nodeKey] = [2]int64{resp.UploadTotal, resp.DownloadTotal}
-	p.mu.Unlock()
-
-	// First poll for this node — just record baseline
-	if prev[0] == 0 && prev[1] == 0 {
-		return
+	nameToUser := make(map[string]int, len(users))
+	for _, u := range users {
+		nameToUser[u.Name] = u.ID
 	}
 
-	deltaUp := resp.UploadTotal - prev[0]
-	deltaDown := resp.DownloadTotal - prev[1]
-
-	// Negative delta = service restarted, use current total as delta
-	if deltaUp < 0 {
-		deltaUp = resp.UploadTotal
-	}
-	if deltaDown < 0 {
-		deltaDown = resp.DownloadTotal
-	}
-	if deltaUp == 0 && deltaDown == 0 {
-		return
-	}
-
-	// Count active connections per sourceIP to estimate per-user traffic
-	// Map sourceIP to user via node access control
-	ipConns := map[string][2]int64{} // sourceIP -> [upload, download] from active connections
-	var totalConnUp, totalConnDown int64
-	for _, c := range resp.Connections {
-		ip := c.Metadata["sourceIP"]
-		if ip == "" {
+	for name, t := range stats {
+		if t.Up == 0 && t.Down == 0 {
 			continue
 		}
-		cur := ipConns[ip]
-		cur[0] += c.Upload
-		cur[1] += c.Download
-		ipConns[ip] = cur
-		totalConnUp += c.Upload
-		totalConnDown += c.Download
-	}
-
-	// Get users with access to this node
-	accessIDs, _ := p.Config.Access.UsersForNode(node.ID)
-	if len(accessIDs) == 0 {
-		return
-	}
-
-	users, _ := p.Users.ListEnabled()
-	accessUsers := make([]model.User, 0)
-	for _, u := range users {
-		for _, aid := range accessIDs {
-			if u.ID == aid {
-				accessUsers = append(accessUsers, u)
-				break
-			}
+		userID, ok := nameToUser[name]
+		if !ok {
+			continue
 		}
+		p.Users.AddTraffic(userID, t.Up, t.Down)
+		p.Nodes.RecordTraffic(node.ID, userID, t.Up, t.Down)
+		log.Printf("traffic: %s@%s +%d↑ +%d↓", name, node.Name, t.Up, t.Down)
 	}
-
-	if len(accessUsers) == 0 {
-		return
-	}
-
-	// Simple allocation: if only 1 user has access, all traffic goes to them.
-	// If multiple users, split proportionally by active connection bytes (or equally if no connections).
-	if len(accessUsers) == 1 {
-		u := accessUsers[0]
-		p.Users.AddTraffic(u.ID, deltaUp, deltaDown)
-		p.Nodes.RecordTraffic(node.ID, u.ID, deltaUp, deltaDown)
-		log.Printf("traffic: %s@%s +%d↑ +%d↓", u.Name, node.Name, deltaUp, deltaDown)
-		return
-	}
-
-	// Multiple users: split delta proportionally based on connection traffic
-	if totalConnUp+totalConnDown > 0 {
-		for _, u := range accessUsers {
-			// We can't map sourceIP to user without extra info, so split evenly
-			share := int64(1)
-			total := int64(len(accessUsers))
-			userUp := deltaUp * share / total
-			userDown := deltaDown * share / total
-			if userUp > 0 || userDown > 0 {
-				p.Users.AddTraffic(u.ID, userUp, userDown)
-				p.Nodes.RecordTraffic(node.ID, u.ID, userUp, userDown)
-			}
-		}
-	} else {
-		// No active connections but had traffic delta — split evenly
-		n := int64(len(accessUsers))
-		for _, u := range accessUsers {
-			p.Users.AddTraffic(u.ID, deltaUp/n, deltaDown/n)
-			p.Nodes.RecordTraffic(node.ID, u.ID, deltaUp/n, deltaDown/n)
-		}
-	}
-	log.Printf("traffic: %s total +%d↑ +%d↓ (split %d users)", node.Name, deltaUp, deltaDown, len(accessUsers))
 }

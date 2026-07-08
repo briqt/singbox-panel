@@ -14,6 +14,12 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// singboxRepo is the GitHub repo the panel installs sing-box from. It must be a
+// build that includes the with_v2ray_api tag (see custom-build workflow),
+// because the panel's generated config enables the v2ray_api StatsService for
+// per-user traffic accounting. Upstream SagerNet releases omit that tag.
+const singboxRepo = "briqt/sing-box"
+
 type NodeOpsHandler struct {
 	Nodes  *model.NodeStore
 	Config *ConfigHandler
@@ -199,15 +205,24 @@ func (h *NodeOpsHandler) install(w http.ResponseWriter, r *http.Request) {
 		arch = "arm64"
 	}
 
-	// Resolve latest version if needed
+	// Resolve latest version if needed. Follow the releases/latest redirect
+	// (…/releases/tag/vX.Y.Z) instead of the JSON API — the API is rate-limited
+	// for unauthenticated callers (60/hr per IP) and fails intermittently from
+	// nodes, whereas the redirect endpoint has no such limit.
 	if version == "latest" {
-		resolveCmd := `curl -sL "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | grep -o '"tag_name":"[^"]*"' | head -1 | cut -d'"' -f4`
-		tagOut, err := sshRun(client, resolveCmd)
-		if err != nil || strings.TrimSpace(tagOut) == "" {
-			writeError(w, http.StatusInternalServerError, "failed to resolve latest version")
+		resolveCmd := `curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/` + singboxRepo + `/releases/latest"`
+		urlOut, err := sshRun(client, resolveCmd)
+		tag := strings.TrimSpace(urlOut)
+		if i := strings.LastIndex(tag, "/tag/"); i >= 0 {
+			tag = tag[i+len("/tag/"):]
+		} else {
+			tag = ""
+		}
+		if err != nil || tag == "" {
+			writeError(w, http.StatusInternalServerError, "failed to resolve latest version from "+singboxRepo)
 			return
 		}
-		version = strings.TrimPrefix(strings.TrimSpace(tagOut), "v")
+		version = strings.TrimPrefix(tag, "v")
 	} else {
 		version = strings.TrimPrefix(version, "v")
 	}
@@ -217,8 +232,15 @@ func (h *NodeOpsHandler) install(w http.ResponseWriter, r *http.Request) {
 		binPath = "/usr/local/bin/sing-box"
 	}
 
-	// Download and install
-	url := fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/download/v%s/sing-box-%s-linux-%s.tar.gz", version, version, arch)
+	// Download and install. Uses the fork build (with_v2ray_api tag) so the
+	// installed binary can run the per-user stats config the panel generates;
+	// upstream release binaries omit v2ray_api and reject that config.
+	url := fmt.Sprintf("https://github.com/%s/releases/download/v%s/sing-box-%s-linux-%s.tar.gz", singboxRepo, version, version, arch)
+	// Install with an atomic rename: cp-over-in-place fails with ETXTBSY
+	// ("text file busy") when sing-box is already running, so we stage the new
+	// binary beside the target and mv it into place. rename(2) swaps the
+	// directory entry while the running process keeps its old inode, so the
+	// upgrade takes effect on the next restart (the config push that follows).
 	installScript := fmt.Sprintf(`
 set -e
 cd /tmp
@@ -226,11 +248,13 @@ rm -rf sing-box-install
 mkdir sing-box-install && cd sing-box-install
 curl -sL "%s" -o sb.tar.gz
 tar xzf sb.tar.gz
-find . -name "sing-box" -type f -exec cp {} %s \;
-chmod +x %s
+BIN=$(find . -name "sing-box" -type f | head -1)
+[ -n "$BIN" ] || { echo "sing-box binary not found in archive"; exit 1; }
+install -m 0755 "$BIN" "%s.new"
+mv -f "%s.new" "%s"
 rm -rf /tmp/sing-box-install
 %s version
-`, url, binPath, binPath, binPath)
+`, url, binPath, binPath, binPath, binPath)
 
 	out, err := sshRun(client, installScript)
 	if err != nil {
