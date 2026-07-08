@@ -149,16 +149,16 @@ become stale.
 - `POST /api/nodes/{id}/install` — install/upgrade sing-box
 - `GET /api/nodes/{id}/setup-assessment?mode=auto&domain=X` — explain DNS and deployment-mode inference
 - `POST /api/nodes/{id}/auto-setup` — idempotent protocol setup and domain migration (`mode`: `auto`, `direct`, `cdn`, or `reality`)
-- `POST /api/nodes/{id}/cert` — issue TLS certificate
+- `POST /api/nodes/{id}/cert-upload` — upload a TLS certificate + key (needed for CDN/HTTPUpgrade nodes)
+
+Auto-setup issues Let's Encrypt certificates and verifies DNS on its own, so
+there is no separate cert-issue or DNS-check endpoint.
 
 ### Config
 - `POST /api/nodes/{id}/generate` — preview config (dry-run)
 - `POST /api/nodes/{id}/push` — push + restart
 - `POST /api/batch/push-all` — push all enabled nodes
 - `GET /api/nodes/{id}/raw-config` — inspect deployed config (read-only)
-
-### Validation
-- `GET /api/validate/dns?domain=X&ip=Y` — DNS resolution check
 
 ### Subscription (no auth)
 - `GET /sub/{token}` — auto-detect format by User-Agent
