@@ -395,7 +395,10 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--accent);cursor:po
         <tbody>
         <template x-for="u in users" :key="u.id">
           <tr>
-            <td><span class="name-cell"><span class="dot" :class="u.enabled?'ok':'bad'"></span><span x-text="u.name"></span></span></td>
+            <td>
+              <span class="name-cell"><span class="dot" :class="u.enabled?'ok':'bad'"></span><span x-text="u.name"></span></span>
+              <div x-show="u.note" class="sub" style="margin-left:17px;font-size:11.5px" x-text="u.note"></div>
+            </td>
             <td>
               <div style="display:flex;align-items:center;gap:9px">
                 <div class="bar"><div class="bar-fill" :class="u.traffic_limit_bytes&&u.traffic_used_bytes/u.traffic_limit_bytes>0.8?'danger':''"
@@ -642,6 +645,7 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--accent);cursor:po
           <span class="sub">GB</span>
         </div>
         <input x-model="newUser.expire_at" type="date" class="input" style="color:var(--text-2)">
+        <input x-model="newUser.note" :placeholder="T('note')" class="input">
       </div>
       <div class="modal-foot">
         <button @click="showCreateUser=false" class="btn-ghost" style="padding:8px 12px;font-size:13px" x-text="T('cancel')"></button>
@@ -661,6 +665,10 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--accent);cursor:po
             <span class="hint" style="margin-top:0" x-text="T('syncHint')"></span>
           </div>
           <button @click="editingUser.enabled=!editingUser.enabled" class="switch" :class="editingUser.enabled?'on':''"><span></span></button>
+        </div>
+        <div class="field">
+          <label class="label" x-text="T('note')"></label>
+          <input x-model="editingUser.note" class="input">
         </div>
         <div class="field">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
@@ -873,7 +881,7 @@ const I18N={
     assessing:'Assessing…',dnsNotReq:'DNS not required',dnsDirect:'DNS points to node',dnsIndirect:'DNS does not point to node',
     uploadCert:'Upload Cert',resetSubToken:'Reset sub token',certPem:'Certificate (PEM, full chain)',keyPem:'Private key (PEM)',upload:'Upload',
     resetTokenConfirm:'Regenerate the subscription token? The current subscription link stops working and must be re-imported.',
-    certUploaded:'Certificate uploaded',tokenReset:'Subscription token regenerated'},
+    certUploaded:'Certificate uploaded',tokenReset:'Subscription token regenerated',note:'Note'},
   zh:{overview:'概览',users:'用户',nodes:'节点',stats:'统计',signOut:'退出',signIn:'登录',loginHint:'请登录以继续',
     totalTraffic:'总流量',user:'用户',traffic:'流量',expires:'到期',subscription:'订阅',actions:'操作',newUser:'新建用户',newNode:'新建节点',
     copyLink:'复制链接',access:'权限',reset:'重置',del:'删除',edit:'编辑',push:'推送',preview:'预览',pushAll:'推送全部',inbounds:'入站协议',
@@ -898,7 +906,7 @@ const I18N={
     assessing:'检测中…',dnsNotReq:'无需 DNS 检测',dnsDirect:'DNS 直连节点',dnsIndirect:'DNS 未直连节点',
     uploadCert:'上传证书',resetSubToken:'重置订阅令牌',certPem:'证书（PEM，完整链）',keyPem:'私钥（PEM）',upload:'上传',
     resetTokenConfirm:'重新生成订阅令牌？当前订阅链接将失效，需要重新导入。',
-    certUploaded:'证书已上传',tokenReset:'订阅令牌已重新生成'}
+    certUploaded:'证书已上传',tokenReset:'订阅令牌已重新生成',note:'备注'}
 };
 
 function app(){return{
@@ -914,9 +922,9 @@ function app(){return{
   meData:null,myNodes:[],
   toasts:[],
   showCreateUser:false,
-  newUser:{name:'',traffic_limit_gb:100,expire_at:''},
+  newUser:{name:'',traffic_limit_gb:100,expire_at:'',note:''},
   showEditUser:false,
-  editingUser:{id:0,name:'',enabled:true,node_ids:[],traffic_limit_gb:0,expire_at:'',traffic_reset_day:1},
+  editingUser:{id:0,name:'',enabled:true,node_ids:[],traffic_limit_gb:0,expire_at:'',traffic_reset_day:1,note:''},
   savingUser:false,
   showCreateNode:false,
   newNode:{name:'',host:'',domain:'',port:22,ssh_user:'root'},
@@ -1022,10 +1030,10 @@ function app(){return{
 
   async createUser(){
     if(!this.newUser.name){this.toast(this.T('username')+' required','error');return}
-    const body={name:this.newUser.name,traffic_limit_bytes:Math.round(this.newUser.traffic_limit_gb*1073741824)};
+    const body={name:this.newUser.name,traffic_limit_bytes:Math.round(this.newUser.traffic_limit_gb*1073741824),note:this.newUser.note||''};
     if(this.newUser.expire_at)body.expire_at=this.newUser.expire_at+' 00:00:00';
     await this.api('/api/users',{method:'POST',body:JSON.stringify(body)});
-    this.showCreateUser=false;this.newUser={name:'',traffic_limit_gb:100,expire_at:''};
+    this.showCreateUser=false;this.newUser={name:'',traffic_limit_gb:100,expire_at:'',note:''};
     this.toast(this.lang==='zh'?'用户已创建':'User created');this.loadTab();
   },
   async editUser(u){
@@ -1040,7 +1048,8 @@ function app(){return{
         node_ids:access.map(n=>n.id),
         traffic_limit_gb: u.traffic_limit_bytes ? Math.round(u.traffic_limit_bytes/1073741824*100)/100 : 0,
         expire_at: u.expire_at ? u.expire_at.split(' ')[0] : '',
-        traffic_reset_day: u.traffic_reset_day || 1
+        traffic_reset_day: u.traffic_reset_day || 1,
+        note: u.note || ''
       };
       this.showEditUser=true;
     }catch(e){this.toast(e.message,'error')}
@@ -1052,7 +1061,8 @@ function app(){return{
       node_ids:u.node_ids.map(Number),
       traffic_limit_bytes:Math.round(u.traffic_limit_gb*1073741824),
       expire_at: u.expire_at ? u.expire_at+' 00:00:00' : '',
-      traffic_reset_day: u.traffic_reset_day
+      traffic_reset_day: u.traffic_reset_day,
+      note: u.note
     };
     this.savingUser=true;
     try{
