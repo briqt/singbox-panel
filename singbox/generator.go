@@ -15,23 +15,59 @@ func hostForURI(host string) string {
 	return host
 }
 
+// V2RayAPIListen is the address sing-box exposes the v2ray_api StatsService on.
+// The panel's traffic poller dials this (tunnelled over SSH) to read exact
+// per-user uplink/downlink counters. Requires a sing-box binary built with the
+// with_v2ray_api tag.
+const V2RayAPIListen = "127.0.0.1:10085"
+
 func GenerateConfig(users []model.User, inbounds []model.NodeInbound) ([]byte, error) {
 	ibList := buildInbounds(users, inbounds)
+
+	experimental := map[string]any{
+		"clash_api": map[string]any{
+			"external_controller": "127.0.0.1:9090",
+		},
+	}
+
+	// Enable per-user traffic accounting. sing-box tracks uplink/downlink
+	// counters for every listed inbound tag and user name, which the poller
+	// reads via the v2ray_api StatsService for exact per-user attribution.
+	if tags := inboundTags(ibList); len(tags) > 0 && len(users) > 0 {
+		names := make([]string, 0, len(users))
+		for _, u := range users {
+			names = append(names, u.Name)
+		}
+		experimental["v2ray_api"] = map[string]any{
+			"listen": V2RayAPIListen,
+			"stats": map[string]any{
+				"enabled":  true,
+				"inbounds": tags,
+				"users":    names,
+			},
+		}
+	}
 
 	config := map[string]any{
 		"log": map[string]any{
 			"level":     "info",
 			"timestamp": true,
 		},
-		"experimental": map[string]any{
-			"clash_api": map[string]any{
-				"external_controller": "127.0.0.1:9090",
-			},
-		},
-		"inbounds":  ibList,
-		"outbounds": []map[string]any{{"type": "direct", "tag": "direct"}},
+		"experimental": experimental,
+		"inbounds":     ibList,
+		"outbounds":    []map[string]any{{"type": "direct", "tag": "direct"}},
 	}
 	return json.MarshalIndent(config, "", "  ")
+}
+
+func inboundTags(ibList []map[string]any) []string {
+	tags := make([]string, 0, len(ibList))
+	for _, ib := range ibList {
+		if tag, ok := ib["tag"].(string); ok && tag != "" {
+			tags = append(tags, tag)
+		}
+	}
+	return tags
 }
 
 func buildInbounds(users []model.User, inbounds []model.NodeInbound) []map[string]any {

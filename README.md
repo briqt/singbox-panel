@@ -19,6 +19,11 @@ Personal sing-box proxy node management panel. Full lifecycle: create node → S
 - **Node health overview** — automatically checks SSH reachability, service state, version, resources, and per-inbound listeners when the node page opens
 - **Admin Web UI** — i18n (zh/en), light theme, full node lifecycle controls
 - **SSH-based operations** — key injection, sing-box install/upgrade, config push with validation
+- **Per-user traffic accounting** — the panel polls each node's sing-box
+  `v2ray_api` StatsService and attributes exact per-user uplink/downlink. This
+  requires a sing-box binary built with the `with_v2ray_api` tag; `install`
+  pulls such a build (see [briqt/sing-box](https://github.com/briqt/sing-box)),
+  since upstream release binaries omit it.
 - **Traffic enforcement** — over-limit users excluded from sing-box config (connection refused)
 
 ## Deployment
@@ -43,7 +48,9 @@ mkdir -p /opt/singbox-panel/data
 # Create config
 cat > /opt/singbox-panel/.env << 'EOF'
 PORT=2082
-ADMIN_TOKEN=your-secret-token-here
+ADMIN_USER=admin
+ADMIN_PASS=change-this-to-a-strong-password
+JWT_SECRET=change-this-to-a-long-random-string
 DATA_DIR=/opt/singbox-panel/data
 SSH_KEY_PATH=/root/.ssh/id_ed25519
 EOF
@@ -64,9 +71,15 @@ Environment variables (or `.env` file in working directory):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8080` | HTTP listen port |
-| `ADMIN_TOKEN` | `changeme` | Bearer token for admin API |
+| `ADMIN_USER` | `admin` | Admin login username |
+| `ADMIN_PASS` | _(empty)_ | Admin login password. Empty disables admin login. |
+| `JWT_SECRET` | _(random per start)_ | Signing key for session tokens. Set it explicitly so sessions survive a restart. |
 | `DATA_DIR` | `/opt/singbox-panel/data` | SQLite database directory |
 | `SSH_KEY_PATH` | `/root/.ssh/id_ed25519` | SSH private key for node management |
+
+Authentication is username/password: `POST /api/login` with `ADMIN_USER`/`ADMIN_PASS`
+returns a JWT used as `Authorization: Bearer <jwt>` for admin endpoints. Regular
+users log in with their own credentials and see only their own subscription.
 
 ## Node Lifecycle
 
@@ -93,7 +106,8 @@ preserved during repeat setup.
 
 ## API
 
-All admin endpoints require `Authorization: Bearer <ADMIN_TOKEN>`.
+All admin endpoints require `Authorization: Bearer <jwt>`, where the JWT comes
+from `POST /api/login`.
 
 ### Users
 - `GET/POST /api/users` — list / create
@@ -135,16 +149,16 @@ become stale.
 - `POST /api/nodes/{id}/install` — install/upgrade sing-box
 - `GET /api/nodes/{id}/setup-assessment?mode=auto&domain=X` — explain DNS and deployment-mode inference
 - `POST /api/nodes/{id}/auto-setup` — idempotent protocol setup and domain migration (`mode`: `auto`, `direct`, `cdn`, or `reality`)
-- `POST /api/nodes/{id}/cert` — issue TLS certificate
+- `POST /api/nodes/{id}/cert-upload` — upload a TLS certificate + key (needed for CDN/HTTPUpgrade nodes)
+
+Auto-setup issues Let's Encrypt certificates and verifies DNS on its own, so
+there is no separate cert-issue or DNS-check endpoint.
 
 ### Config
 - `POST /api/nodes/{id}/generate` — preview config (dry-run)
 - `POST /api/nodes/{id}/push` — push + restart
 - `POST /api/batch/push-all` — push all enabled nodes
 - `GET /api/nodes/{id}/raw-config` — inspect deployed config (read-only)
-
-### Validation
-- `GET /api/validate/dns?domain=X&ip=Y` — DNS resolution check
 
 ### Subscription (no auth)
 - `GET /sub/{token}` — auto-detect format by User-Agent
