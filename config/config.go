@@ -8,7 +8,6 @@ import (
 
 type Config struct {
 	Port       string
-	AdminToken string
 	AdminUser  string
 	AdminPass  string
 	JWTSecret  string
@@ -27,7 +26,6 @@ func Load() *Config {
 	}
 	c := &Config{
 		Port:       getEnv("PORT", "8080"),
-		AdminToken: getEnv("ADMIN_TOKEN", ""),
 		AdminUser:  getEnv("ADMIN_USER", "admin"),
 		AdminPass:  getEnv("ADMIN_PASS", ""),
 		JWTSecret:  jwtSecret,

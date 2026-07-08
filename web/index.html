@@ -4,58 +4,297 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SingBox Panel</title>
-<script src="https://cdn.tailwindcss.com"></script>
+<script>
+// Apply saved theme before paint to avoid a flash.
+(function(){try{var t=localStorage.getItem('panel_theme');if(!t){t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})();
+</script>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <style>
+/* ============ Design tokens ============ */
+:root{
+  --bg:#eef0f4; --surface:#ffffff; --surface-2:#f4f6f9; --surface-3:#eceff3;
+  --border:#e0e4ea; --border-strong:#cfd5de;
+  --text:#181b21; --text-2:#454b55; --muted:#727a86; --faint:#9aa2ae;
+  --accent:#5b5bd6; --accent-hover:#4a4ac4; --accent-soft:#ececfb; --accent-text:#4342b0;
+  --ok:#0f9d63; --ok-soft:#e3f5ec; --ok-text:#0b7a4d;
+  --warn:#c67c12; --warn-soft:#fbf0da; --warn-text:#96600d;
+  --bad:#dc4b56; --bad-soft:#fce9ea; --bad-text:#b0313c;
+  --up:#5b5bd6; --down:#0f9d63;
+  --shadow:0 1px 2px rgba(20,25,35,.06),0 4px 16px -6px rgba(20,25,35,.10);
+  --shadow-lg:0 12px 40px -12px rgba(20,25,35,.28);
+  --radius:12px; --radius-sm:8px; --radius-lg:16px;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,"JetBrains Mono","Roboto Mono",Menlo,Consolas,monospace;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue","PingFang SC","Microsoft YaHei",sans-serif;
+}
+:root[data-theme="dark"]{
+  --bg:#0c0e12; --surface:#15181d; --surface-2:#1b1f26; --surface-3:#20252d;
+  --border:#282e37; --border-strong:#353c47;
+  --text:#e7eaef; --text-2:#b6bcc7; --muted:#8a929e; --faint:#666e7b;
+  --accent:#8b8cf0; --accent-hover:#9d9ef4; --accent-soft:#22243a; --accent-text:#b3b4f6;
+  --ok:#2bbd7e; --ok-soft:#12271e; --ok-text:#5fd6a3;
+  --warn:#e0a13c; --warn-soft:#2a2113; --warn-text:#e8bd72;
+  --bad:#f06b74; --bad-soft:#2c1618; --bad-text:#f49aa0;
+  --up:#8b8cf0; --down:#2bbd7e;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -10px rgba(0,0,0,.55);
+  --shadow-lg:0 20px 50px -16px rgba(0,0,0,.7);
+}
+
+/* ============ Reset & base ============ */
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg);color:var(--text);font-family:var(--sans);
+  font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;min-height:100vh;
+}
 [x-cloak]{display:none!important}
-::-webkit-scrollbar{width:6px;height:6px}
+h1,h2,h3,p{margin:0}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+a{color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.num{font-variant-numeric:tabular-nums}
+::-webkit-scrollbar{width:8px;height:8px}
 ::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:3px}
-.spin{animation:spin 1s linear infinite}
+::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:4px}
+::selection{background:var(--accent-soft);color:var(--accent-text)}
+
 @keyframes spin{to{transform:rotate(360deg)}}
+.spin{display:inline-block;animation:spin 1s linear infinite}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ============ Layout ============ */
+.shell{min-height:100vh;display:flex;flex-direction:column}
+.topbar{
+  position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--surface) 85%,transparent);
+  backdrop-filter:saturate(180%) blur(12px);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:20px;padding:0 20px;height:56px;
+}
+.brand{display:flex;align-items:center;gap:10px;font-weight:650;letter-spacing:-.01em;white-space:nowrap}
+.brand-mark{
+  width:26px;height:26px;border-radius:7px;flex:none;
+  background:linear-gradient(135deg,var(--accent),#7d7df0);
+  display:grid;place-items:center;color:#fff;font-weight:800;font-size:14px;
+  box-shadow:0 2px 8px -2px var(--accent);
+}
+.brand small{color:var(--faint);font-weight:500;font-size:11px}
+.nav{display:flex;gap:2px;background:var(--surface-2);padding:3px;border-radius:10px;border:1px solid var(--border)}
+.nav-item{
+  padding:6px 14px;border-radius:7px;font-size:13px;font-weight:500;color:var(--muted);
+  transition:color .15s,background .15s;white-space:nowrap;
+}
+.nav-item:hover{color:var(--text-2)}
+.nav-item.active{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:6px}
+.icon-btn{
+  width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:var(--muted);
+  border:1px solid transparent;transition:.15s;font-size:14px;
+}
+.icon-btn:hover{background:var(--surface-2);color:var(--text);border-color:var(--border)}
+.who{font-size:12px;color:var(--muted);padding:0 8px;display:flex;align-items:center;gap:6px}
+.who b{color:var(--text-2);font-weight:600}
+.main{width:100%;max-width:1080px;margin:0 auto;padding:26px 20px 60px;flex:1;animation:fade .3s ease}
+
+/* ============ Type helpers ============ */
+.page-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.page-title{font-size:20px;font-weight:680;letter-spacing:-.02em}
+.eyebrow{font-size:10.5px;font-weight:650;letter-spacing:.09em;text-transform:uppercase;color:var(--faint)}
+.sub{color:var(--muted);font-size:12.5px}
+
+/* ============ Buttons ============ */
+.btn{
+  display:inline-flex;align-items:center;gap:6px;justify-content:center;
+  padding:8px 14px;border-radius:9px;font-size:13px;font-weight:550;
+  border:1px solid var(--border-strong);background:var(--surface);color:var(--text-2);
+  transition:.15s;white-space:nowrap;
+}
+.btn:hover{background:var(--surface-2);border-color:var(--border-strong);color:var(--text)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-sm{padding:6px 11px;font-size:12px;border-radius:8px}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent-hover);border-color:var(--accent-hover);color:#fff}
+.btn-accent-soft{background:var(--accent-soft);border-color:transparent;color:var(--accent-text)}
+.btn-accent-soft:hover{background:var(--accent-soft);color:var(--accent-text);filter:brightness(.97)}
+.btn-warn{background:var(--warn-soft);border-color:transparent;color:var(--warn-text)}
+.btn-warn:hover{filter:brightness(.97);color:var(--warn-text)}
+.btn-danger{color:var(--bad-text);border-color:var(--border)}
+.btn-danger:hover{background:var(--bad-soft);border-color:transparent;color:var(--bad-text)}
+.btn-ghost{border-color:transparent;color:var(--muted);background:transparent}
+.btn-ghost:hover{background:var(--surface-2);color:var(--text)}
+.linkish{color:var(--accent-text);font-size:12.5px;font-weight:550}
+.linkish:hover{text-decoration:underline}
+
+/* ============ Cards ============ */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
+.card-pad{padding:18px}
+.card-head{padding:13px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:10px}
+.grid{display:grid;gap:14px}
+.g-3{grid-template-columns:repeat(3,1fr)}
+.g-2{grid-template-columns:repeat(2,1fr)}
+@media(max-width:720px){.g-3,.g-2{grid-template-columns:1fr}}
+
+/* stat tiles */
+.tile{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow);position:relative;overflow:hidden}
+.tile .eyebrow{margin-bottom:8px}
+.tile-val{font-size:28px;font-weight:720;letter-spacing:-.02em;line-height:1;font-variant-numeric:tabular-nums}
+.tile-val small{font-size:14px;font-weight:600;color:var(--muted);margin-left:3px}
+.tile-foot{margin-top:8px;font-size:12px;color:var(--muted)}
+.tile-accent{position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent);opacity:.85}
+
+/* list rows */
+.rows>*+*{border-top:1px solid var(--border)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 16px;font-size:13px}
+.row:hover{background:var(--surface-2)}
+
+/* ============ Dots & chips ============ */
+.dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
+.dot.ok{background:var(--ok)} .dot.bad{background:var(--bad)} .dot.warn{background:var(--warn)} .dot.idle{background:var(--faint)}
+.dot.sm{width:6px;height:6px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;line-height:1.4;white-space:nowrap}
+.chip .dot{width:6px;height:6px}
+.chip.ok{background:var(--ok-soft);color:var(--ok-text)}
+.chip.bad{background:var(--bad-soft);color:var(--bad-text)}
+.chip.warn{background:var(--warn-soft);color:var(--warn-text)}
+.chip.idle{background:var(--surface-3);color:var(--muted)}
+.chip.proto{background:var(--accent-soft);color:var(--accent-text);font-family:var(--mono);letter-spacing:0}
+.tag{font-family:var(--mono);font-size:11px;color:var(--muted)}
+
+/* ============ Tables ============ */
+.table-wrap{overflow-x:auto}
+table.tbl{width:100%;border-collapse:collapse;font-size:13.5px}
+.tbl thead th{
+  text-align:left;padding:10px 16px;font-size:10.5px;font-weight:650;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--border);white-space:nowrap;
+}
+.tbl thead th.r,.tbl td.r{text-align:right}
+.tbl tbody td{padding:12px 16px;border-bottom:1px solid var(--border);vertical-align:middle}
+.tbl tbody tr:last-child td{border-bottom:none}
+.tbl tbody tr:hover{background:var(--surface-2)}
+.name-cell{display:flex;align-items:center;gap:9px;font-weight:600;color:var(--text)}
+.row-actions{display:flex;align-items:center;justify-content:flex-end;gap:4px}
+.mini-btn{padding:5px 9px;border-radius:7px;font-size:12px;font-weight:550;color:var(--muted);transition:.12s}
+.mini-btn:hover{background:var(--surface-3);color:var(--text)}
+.mini-btn.accent:hover{background:var(--accent-soft);color:var(--accent-text)}
+.mini-btn.danger:hover{background:var(--bad-soft);color:var(--bad-text)}
+
+/* progress bar */
+.bar{width:96px;height:6px;background:var(--surface-3);border-radius:999px;overflow:hidden;flex:none}
+.bar-fill{height:100%;border-radius:999px;background:var(--accent);transition:width .3s}
+.bar-fill.danger{background:var(--bad)}
+.bar-label{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* ============ Node cards ============ */
+.node{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+.node+.node{margin-top:12px}
+.node-head{display:flex;align-items:center;gap:12px;padding:13px 16px;cursor:pointer;transition:background .15s}
+.node-head:hover{background:var(--surface-2)}
+.node-title{font-weight:620;font-size:14px}
+.node-meta{font-family:var(--mono);font-size:11.5px}
+.reorder{display:flex;flex-direction:column;line-height:.7}
+.reorder button{color:var(--faint);font-size:9px;padding:1px 3px}
+.reorder button:hover{color:var(--text)}
+.caret{color:var(--faint);font-size:11px;transition:transform .2s}
+.node-body{border-top:1px solid var(--border)}
+.node-actions{display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:12px 16px;background:var(--surface-2);border-bottom:1px solid var(--border)}
+.sysinfo{display:flex;flex-wrap:wrap;gap:18px;padding:9px 16px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:11.5px;color:var(--muted)}
+.sysinfo b{color:var(--faint);font-weight:600;margin-right:5px;text-transform:uppercase;font-size:10px;letter-spacing:.05em}
+.inbound{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;font-size:12.5px}
+.inbound:hover{background:var(--surface-2)}
+
+/* ============ Inputs ============ */
+.field{display:block}
+.label{display:block;font-size:12px;font-weight:550;color:var(--text-2);margin-bottom:6px}
+.hint{font-size:11.5px;color:var(--muted);margin-top:5px}
+.input{
+  width:100%;padding:9px 12px;border-radius:9px;background:var(--surface-2);
+  border:1px solid var(--border);color:var(--text);transition:.15s;font-size:13.5px;
+}
+.input::placeholder{color:var(--faint)}
+.input:focus{outline:none;border-color:var(--accent);background:var(--surface);box-shadow:0 0 0 3px var(--accent-soft)}
+select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 11px center;padding-right:32px}
+.check-list{max-height:170px;overflow-y:auto;border:1px solid var(--border);border-radius:9px}
+.check-row{display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;font-size:13px}
+.check-row+.check-row{border-top:1px solid var(--border)}
+.check-row:hover{background:var(--surface-2)}
+input[type=checkbox]{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
+/* switch */
+.switch{position:relative;width:40px;height:22px;border-radius:999px;background:var(--border-strong);transition:.2s;flex:none}
+.switch.on{background:var(--ok)}
+.switch span{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.2s;box-shadow:0 1px 2px rgba(0,0,0,.3)}
+.switch.on span{transform:translateX(18px)}
+
+/* ============ Modal ============ */
+.overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;
+  background:rgba(12,14,18,.5);backdrop-filter:blur(3px);animation:fade .15s ease}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-lg);width:100%;padding:22px;animation:rise .2s ease}
+.modal-title{font-size:15px;font-weight:650;letter-spacing:-.01em}
+.modal-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:22px}
+.modal .stack>*+*{margin-top:13px}
+.w-xs{max-width:340px}.w-sm{max-width:400px}.w-md{max-width:480px}.w-lg{max-width:720px}
+.assess{border-radius:9px;padding:9px 12px;font-size:11.5px;border:1px solid}
+.assess.ok{border-color:transparent;background:var(--ok-soft);color:var(--ok-text)}
+.assess.warn{border-color:transparent;background:var(--warn-soft);color:var(--warn-text)}
+.codebox{width:100%;flex:1;min-height:300px;padding:12px;border-radius:9px;background:var(--surface-2);
+  border:1px solid var(--border);color:var(--text-2);font-family:var(--mono);font-size:12px;resize:none;line-height:1.55}
+
+/* ============ Toasts ============ */
+.toasts{position:fixed;bottom:18px;right:18px;z-index:100;display:flex;flex-direction:column;gap:8px;max-width:min(92vw,380px)}
+.toast{display:flex;align-items:center;gap:9px;padding:11px 14px;border-radius:10px;font-size:13px;
+  border:1px solid;box-shadow:var(--shadow-lg);animation:rise .2s ease;background:var(--surface)}
+.toast.ok{border-color:var(--ok);color:var(--ok-text)}
+.toast.error{border-color:var(--bad);color:var(--bad-text)}
+.toast-ic{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:800;color:#fff;flex:none}
+.toast.ok .toast-ic{background:var(--ok)} .toast.error .toast-ic{background:var(--bad)}
+
+/* ============ Login ============ */
+.login-wrap{min-height:100vh;display:grid;place-items:center;padding:20px;
+  background:radial-gradient(1200px 500px at 50% -10%,var(--accent-soft),transparent 60%),var(--bg)}
+.login-card{width:100%;max-width:340px;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius-lg);padding:30px 26px;box-shadow:var(--shadow-lg)}
+.login-brand{width:44px;height:44px;border-radius:12px;margin:0 auto 14px;
+  background:linear-gradient(135deg,var(--accent),#7d7df0);display:grid;place-items:center;
+  color:#fff;font-weight:800;font-size:20px;box-shadow:0 6px 20px -6px var(--accent)}
 </style>
 </head>
-<body class="bg-gray-50 text-gray-700 min-h-screen antialiased">
+<body>
 <div x-data="app()" x-cloak>
 
 <!-- Toasts -->
-<div class="fixed bottom-4 right-4 z-[100] space-y-2">
+<div class="toasts">
   <template x-for="t in toasts" :key="t.id">
-    <div :class="t.type==='error'?'border-red-200 bg-red-50 text-red-700':'border-emerald-200 bg-emerald-50 text-emerald-700'"
-         class="px-4 py-2.5 rounded-lg text-sm border flex items-center gap-2 shadow-lg max-w-sm"
+    <div class="toast" :class="t.type==='error'?'error':'ok'"
          x-init="setTimeout(()=>toasts=toasts.filter(x=>x.id!==t.id),4000)">
-      <span x-text="t.type==='error'?'✕':'✓'" class="text-xs font-bold flex-shrink-0"></span>
-      <span x-text="t.msg" class="break-all"></span>
+      <span class="toast-ic" x-text="t.type==='error'?'!':'✓'"></span>
+      <span class="mono" style="font-family:var(--sans);word-break:break-word" x-text="t.msg"></span>
     </div>
   </template>
 </div>
 
 <!-- Login -->
 <template x-if="!authed">
-<div class="flex items-center justify-center min-h-screen bg-gray-100">
-  <div class="bg-white border border-gray-200 p-8 rounded-2xl w-full max-w-xs shadow-sm">
-    <div class="text-center mb-6">
-      <div class="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center mx-auto mb-3 text-lg font-bold text-white">S</div>
-      <h1 class="text-lg font-semibold text-gray-900">SingBox Panel</h1>
-      <p class="text-xs text-gray-400 mt-1" x-text="T('loginHint')"></p>
+<div class="login-wrap">
+  <div class="login-card">
+    <div style="text-align:center;margin-bottom:22px">
+      <div class="login-brand">S</div>
+      <h1 style="font-size:17px;font-weight:680;letter-spacing:-.02em">SingBox Panel</h1>
+      <p class="sub" style="margin-top:4px" x-text="T('loginHint')"></p>
     </div>
-    <div class="space-y-3">
-      <input x-model="loginUser" type="text" :placeholder="T('username')" autocomplete="username"
-             class="w-full px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition placeholder-gray-400">
-      <input x-model="loginPass" type="password" :placeholder="T('password')" autocomplete="current-password"
-             class="w-full px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition placeholder-gray-400"
-             @keydown.enter="login()">
+    <div class="stack" style="display:flex;flex-direction:column;gap:11px">
+      <input x-model="loginUser" type="text" :placeholder="T('username')" autocomplete="username" class="input">
+      <input x-model="loginPass" type="password" :placeholder="T('password')" autocomplete="current-password" class="input" @keydown.enter="login()">
     </div>
-    <button @click="login()" class="w-full mt-4 bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg text-sm font-medium transition" x-text="T('signIn')"></button>
-    <div class="text-center mt-3">
-      <button @click="showRegForm=!showRegForm" class="text-xs text-gray-400 hover:text-blue-600 transition" x-text="T('register')"></button>
+    <button @click="login()" class="btn btn-primary" style="width:100%;margin-top:16px" x-text="T('signIn')"></button>
+    <div style="text-align:center;margin-top:14px">
+      <button @click="showRegForm=!showRegForm" class="btn-ghost" style="font-size:12px;padding:4px 8px" x-text="T('register')"></button>
     </div>
     <template x-if="showRegForm">
-      <div class="mt-4 pt-4 border-t border-gray-100 space-y-3">
-        <input x-model="regUser" type="text" :placeholder="T('username')" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400">
-        <input x-model="regPass" type="password" :placeholder="T('password')" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400"
-               @keydown.enter="doRegister()">
-        <button @click="doRegister()" class="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 rounded-lg text-sm transition" x-text="T('register')"></button>
+      <div style="margin-top:14px;padding-top:16px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:11px">
+        <input x-model="regUser" type="text" :placeholder="T('username')" class="input">
+        <input x-model="regPass" type="password" :placeholder="T('password')" class="input" @keydown.enter="doRegister()">
+        <button @click="doRegister()" class="btn" style="width:100%" x-text="T('register')"></button>
       </div>
     </template>
   </div>
@@ -64,127 +303,116 @@
 
 <!-- App -->
 <template x-if="authed">
-<div class="min-h-screen">
-  <!-- Top Bar -->
-  <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between sticky top-0 z-10">
-    <div class="flex items-center gap-6">
-      <span class="font-semibold text-gray-900 text-sm">SingBox Panel</span>
-      <nav class="flex items-center gap-1">
-        <template x-if="role==='admin'">
-          <template x-for="t in [{id:'dash',k:'overview'},{id:'users',k:'users'},{id:'nodes',k:'nodes'},{id:'stats',k:'stats'}]">
-            <button @click="tab=t.id;loadTab()" :class="tab===t.id?'bg-gray-100 text-gray-900':'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
-                    class="px-3 py-1.5 rounded-md text-sm transition" x-text="T(t.k)"></button>
-          </template>
-        </template>
-        <template x-if="role==='user'">
-          <template x-for="t in [{id:'myinfo',k:'myInfo'}]">
-            <button @click="tab=t.id;loadTab()" :class="tab===t.id?'bg-gray-100 text-gray-900':'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
-                    class="px-3 py-1.5 rounded-md text-sm transition" x-text="T(t.k)"></button>
-          </template>
-        </template>
-      </nav>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">S</span>
+      <span>SingBox<small style="margin-left:6px">Panel</small></span>
     </div>
-    <div class="flex items-center gap-3">
-      <span class="text-xs text-gray-400" x-text="currentUser"></span>
-      <button @click="toggleLang()" class="text-xs text-gray-400 hover:text-gray-600 transition" x-text="lang==='zh'?'EN':'中文'"></button>
-      <button @click="logout()" class="text-xs text-gray-400 hover:text-gray-600 transition" x-text="T('signOut')"></button>
+    <nav class="nav">
+      <template x-if="role==='admin'">
+        <template x-for="t in [{id:'dash',k:'overview'},{id:'users',k:'users'},{id:'nodes',k:'nodes'},{id:'stats',k:'stats'}]" :key="t.id">
+          <button @click="tab=t.id;loadTab()" class="nav-item" :class="tab===t.id?'active':''" x-text="T(t.k)"></button>
+        </template>
+      </template>
+      <template x-if="role==='user'">
+        <button @click="tab='myinfo';loadTab()" class="nav-item active" x-text="T('myInfo')"></button>
+      </template>
+    </nav>
+    <div class="topbar-right">
+      <span class="who"><b x-text="currentUser"></b></span>
+      <button @click="toggleTheme()" class="icon-btn" :title="theme==='dark'?'Light':'Dark'" x-text="theme==='dark'?'☀':'☾'"></button>
+      <button @click="toggleLang()" class="icon-btn" style="font-size:11px;font-weight:600" x-text="lang==='zh'?'EN':'中'"></button>
+      <button @click="logout()" class="icon-btn" :title="T('signOut')">⏻</button>
     </div>
   </header>
 
-  <!-- Content -->
-  <main class="max-w-5xl mx-auto px-6 py-6">
+  <main class="main">
 
   <!-- Overview -->
   <div x-show="tab==='dash'">
-    <h2 class="text-lg font-semibold text-gray-900 mb-4" x-text="T('overview')"></h2>
-    <div class="grid grid-cols-3 gap-4 mb-6">
-      <div class="bg-white border border-gray-200 rounded-xl p-4">
-        <div class="text-2xl font-bold text-gray-900" x-text="users.length"></div>
-        <div class="text-xs text-gray-400 mt-1" x-text="T('users')"></div>
+    <div class="page-head"><h2 class="page-title" x-text="T('overview')"></h2></div>
+    <div class="grid g-3" style="margin-bottom:14px">
+      <div class="tile"><div class="tile-accent"></div>
+        <div class="eyebrow" x-text="T('users')"></div>
+        <div class="tile-val num" x-text="users.length"></div>
+        <div class="tile-foot"><span x-text="users.filter(u=>u.enabled).length"></span> <span x-text="lang==='zh'?'已启用':'active'"></span></div>
       </div>
-      <div class="bg-white border border-gray-200 rounded-xl p-4">
-        <div class="text-2xl font-bold text-gray-900" x-text="nodes.length"></div>
-        <div class="text-xs text-gray-400 mt-1" x-text="T('nodes')"></div>
+      <div class="tile"><div class="tile-accent" style="background:var(--ok)"></div>
+        <div class="eyebrow" x-text="T('nodes')"></div>
+        <div class="tile-val num" x-text="nodes.length"></div>
+        <div class="tile-foot"><span x-text="nodes.filter(n=>n.enabled).length"></span> <span x-text="lang==='zh'?'已启用':'enabled'"></span></div>
       </div>
-      <div class="bg-white border border-gray-200 rounded-xl p-4">
-        <div class="text-2xl font-bold text-gray-900" x-text="fmtBytes(users.reduce((a,u)=>a+u.traffic_used_bytes,0))"></div>
-        <div class="text-xs text-gray-400 mt-1" x-text="T('totalTraffic')"></div>
+      <div class="tile"><div class="tile-accent" style="background:var(--down)"></div>
+        <div class="eyebrow" x-text="T('totalTraffic')"></div>
+        <div class="tile-val num" x-text="fmtBytes(users.reduce((a,u)=>a+u.traffic_used_bytes,0))"></div>
+        <div class="tile-foot" x-text="lang==='zh'?'全部用户累计':'across all users'"></div>
       </div>
     </div>
-    <div class="grid grid-cols-2 gap-4">
-      <div class="bg-white border border-gray-200 rounded-xl p-4">
-        <h3 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3" x-text="T('users')"></h3>
-        <template x-for="u in users" :key="u.id">
-          <div class="flex items-center justify-between py-1.5 text-sm">
-            <div class="flex items-center gap-2">
-              <span :class="u.enabled?'bg-emerald-500':'bg-gray-300'" class="w-1.5 h-1.5 rounded-full"></span>
-              <span x-text="u.name" class="text-gray-700"></span>
+    <div class="grid g-2">
+      <div class="card">
+        <div class="card-head"><span class="eyebrow" x-text="T('users')"></span></div>
+        <div class="rows">
+          <template x-for="u in users" :key="u.id">
+            <div class="row">
+              <span class="name-cell"><span class="dot" :class="u.enabled?'ok':'idle'"></span><span x-text="u.name"></span></span>
+              <span class="bar-label mono" x-text="fmtBytes(u.traffic_used_bytes)"></span>
             </div>
-            <span class="text-xs text-gray-400" x-text="fmtBytes(u.traffic_used_bytes)"></span>
-          </div>
-        </template>
+          </template>
+          <div x-show="!users.length" class="row sub" x-text="lang==='zh'?'暂无用户':'No users'"></div>
+        </div>
       </div>
-      <div class="bg-white border border-gray-200 rounded-xl p-4">
-        <h3 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3" x-text="T('nodes')"></h3>
-        <template x-for="n in nodes" :key="n.id">
-          <div class="flex items-center justify-between py-1.5 text-sm">
-            <div class="flex items-center gap-2">
-              <span :class="n.enabled?'bg-emerald-500':'bg-gray-300'" class="w-1.5 h-1.5 rounded-full"></span>
-              <span x-text="n.name" class="text-gray-700"></span>
+      <div class="card">
+        <div class="card-head"><span class="eyebrow" x-text="T('nodes')"></span></div>
+        <div class="rows">
+          <template x-for="n in nodes" :key="n.id">
+            <div class="row">
+              <span class="name-cell"><span class="dot" :class="n.enabled?'ok':'idle'"></span><span x-text="n.name"></span></span>
+              <span class="node-meta" style="color:var(--muted)" x-text="n.domain||n.host"></span>
             </div>
-            <span class="text-xs text-gray-400 font-mono" x-text="n.domain||n.host"></span>
-          </div>
-        </template>
+          </template>
+          <div x-show="!nodes.length" class="row sub" x-text="lang==='zh'?'暂无节点':'No nodes'"></div>
+        </div>
       </div>
     </div>
   </div>
 
   <!-- Users Tab -->
   <div x-show="tab==='users'">
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold text-gray-900" x-text="T('users')"></h2>
-      <button @click="showCreateUser=true" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition" x-text="'+ '+T('newUser')"></button>
+    <div class="page-head">
+      <h2 class="page-title" x-text="T('users')"></h2>
+      <button @click="showCreateUser=true" class="btn btn-primary btn-sm" x-text="'+ '+T('newUser')"></button>
     </div>
-    <div class="bg-white border border-gray-200 rounded-xl overflow-hidden">
-      <table class="w-full text-sm">
-        <thead><tr class="border-b border-gray-100 text-xs text-gray-400 uppercase tracking-wider">
-          <th class="px-4 py-3 text-left" x-text="T('user')"></th>
-          <th class="px-4 py-3 text-left" x-text="T('traffic')"></th>
-          <th class="px-4 py-3 text-left" x-text="T('expires')"></th>
-          <th class="px-4 py-3 text-left" x-text="T('subscription')"></th>
-          <th class="px-4 py-3 text-right" x-text="T('actions')"></th>
+    <div class="card table-wrap">
+      <table class="tbl">
+        <thead><tr>
+          <th x-text="T('user')"></th>
+          <th x-text="T('traffic')"></th>
+          <th x-text="T('expires')"></th>
+          <th x-text="T('subscription')"></th>
+          <th class="r" x-text="T('actions')"></th>
         </tr></thead>
         <tbody>
         <template x-for="u in users" :key="u.id">
-          <tr class="border-b border-gray-50 hover:bg-gray-50/50 transition">
-            <td class="px-4 py-3">
-              <div class="flex items-center gap-2">
-                <span :class="u.enabled?'bg-emerald-500':'bg-red-400'" class="w-2 h-2 rounded-full flex-shrink-0"></span>
-                <span x-text="u.name" class="text-gray-900 font-medium"></span>
+          <tr>
+            <td><span class="name-cell"><span class="dot" :class="u.enabled?'ok':'bad'"></span><span x-text="u.name"></span></span></td>
+            <td>
+              <div style="display:flex;align-items:center;gap:9px">
+                <div class="bar"><div class="bar-fill" :class="u.traffic_limit_bytes&&u.traffic_used_bytes/u.traffic_limit_bytes>0.8?'danger':''"
+                     :style="'width:'+Math.min(100,u.traffic_limit_bytes?Math.round(u.traffic_used_bytes/u.traffic_limit_bytes*100):0)+'%'"></div></div>
+                <span class="bar-label" x-text="fmtBytes(u.traffic_used_bytes)+' / '+(u.traffic_limit_bytes?fmtBytes(u.traffic_limit_bytes):'∞')"></span>
               </div>
             </td>
-            <td class="px-4 py-3">
-              <div class="flex items-center gap-2">
-                <div class="w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                  <div class="h-full rounded-full" :class="u.traffic_limit_bytes&&u.traffic_used_bytes/u.traffic_limit_bytes>0.8?'bg-red-500':'bg-blue-500'"
-                       :style="'width:'+Math.min(100,u.traffic_limit_bytes?Math.round(u.traffic_used_bytes/u.traffic_limit_bytes*100):0)+'%'"></div>
-                </div>
-                <span class="text-xs text-gray-400" x-text="fmtBytes(u.traffic_used_bytes)+' / '+(u.traffic_limit_bytes?fmtBytes(u.traffic_limit_bytes):'∞')"></span>
-              </div>
-            </td>
-            <td class="px-4 py-3 text-xs text-gray-400" x-text="u.expire_at||'—'"></td>
-            <td class="px-4 py-3">
-              <button @click="copySubLink(u)" class="text-xs text-blue-600 hover:text-blue-700 transition" x-text="T('copyLink')"></button>
-            </td>
-            <td class="px-4 py-3">
-              <div class="flex items-center justify-end gap-1">
-                <button @click="editUser(u)" class="px-2 py-1 text-xs text-blue-500 hover:bg-blue-50 rounded transition">Edit</button>
-                <button @click="resetTraffic(u)" class="px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 rounded transition" x-text="T('reset')"></button>
-                <button @click="deleteUser(u)" class="px-2 py-1 text-xs text-red-400 hover:bg-red-50 rounded transition" x-text="T('del')"></button>
-              </div>
-            </td>
+            <td class="sub num" x-text="u.expire_at||'—'"></td>
+            <td><button @click="copySubLink(u)" class="linkish" x-text="T('copyLink')"></button></td>
+            <td class="r"><div class="row-actions">
+              <button @click="editUser(u)" class="mini-btn accent" x-text="T('edit')"></button>
+              <button @click="resetTraffic(u)" class="mini-btn" x-text="T('reset')"></button>
+              <button @click="deleteUser(u)" class="mini-btn danger" x-text="T('del')"></button>
+            </div></td>
           </tr>
         </template>
+        <template x-if="!users.length"><tr><td colspan="5" class="sub" style="text-align:center;padding:28px" x-text="lang==='zh'?'暂无用户':'No users yet'"></td></tr></template>
         </tbody>
       </table>
     </div>
@@ -192,187 +420,167 @@
 
   <!-- Nodes Tab -->
   <div x-show="tab==='nodes'">
-    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-      <div class="flex items-center gap-3">
-        <h2 class="text-lg font-semibold text-gray-900" x-text="T('nodes')"></h2>
-        <span class="text-xs text-gray-400" x-text="nodeStatusOverview()"></span>
+    <div class="page-head">
+      <div style="display:flex;align-items:baseline;gap:12px">
+        <h2 class="page-title" x-text="T('nodes')"></h2>
+        <span class="sub" x-text="nodeStatusOverview()"></span>
       </div>
-      <div class="flex flex-wrap items-center gap-2">
-        <button @click="loadNodeStatuses(true)" :disabled="nodesStatusLoading"
-                class="px-3 py-1.5 border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 text-xs rounded-lg transition disabled:opacity-50 flex items-center gap-1.5">
-          <span :class="nodesStatusLoading?'spin':''">↻</span>
-          <span x-text="lang==='zh'?'刷新状态':'Refresh status'"></span>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        <button @click="loadNodeStatuses(true)" :disabled="nodesStatusLoading" class="btn btn-sm">
+          <span :class="nodesStatusLoading?'spin':''">↻</span><span x-text="T('refreshStatus')"></span>
         </button>
-        <button @click="showCreateNode=true" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition" x-text="'+ '+T('newNode')"></button>
-        <button @click="pushAll()" class="px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs rounded-lg transition" x-text="T('pushAll')"></button>
+        <button @click="showCreateNode=true" class="btn btn-primary btn-sm" x-text="'+ '+T('newNode')"></button>
+        <button @click="pushAll()" class="btn btn-warn btn-sm" x-text="T('pushAll')"></button>
       </div>
     </div>
-    <div class="space-y-3">
+    <div>
       <template x-for="n in nodes" :key="n.id">
-        <div class="bg-white border border-gray-200 rounded-xl overflow-hidden">
-          <div class="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-gray-50/50 transition" @click="toggleNodeDetail(n)">
-            <div class="flex items-center gap-3">
-              <span :class="n.enabled?'bg-emerald-500':'bg-gray-300'" class="w-2 h-2 rounded-full"></span>
-              <span x-text="n.name" class="text-gray-900 font-medium text-sm"></span>
-              <span x-text="n.domain||''" class="text-xs text-blue-500 font-mono"></span>
-              <span x-text="n.host" class="text-xs text-gray-400 font-mono"></span>
-            </div>
-            <div class="flex items-center gap-1">
-              <button @click.stop="moveNode(n,-1)" class="text-gray-300 hover:text-gray-600 text-xs px-1" title="Move up">▲</button>
-              <button @click.stop="moveNode(n,1)" class="text-gray-300 hover:text-gray-600 text-xs px-1" title="Move down">▼</button>
-              <div class="mr-2 flex items-center gap-2">
-                <span x-show="nodeStatusLoading[n.id]" class="inline-flex items-center gap-1 text-[10px] text-gray-400">
-                  <span class="spin">↻</span><span x-text="lang==='zh'?'检测中':'checking'"></span>
-                </span>
-                <span x-show="!nodeStatusLoading[n.id]" class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium"
-                      :class="nodeHealthBadgeClass(n.id)">
-                  <span class="w-1.5 h-1.5 rounded-full" :class="nodeHealthDotClass(n.id)"></span>
-                  <span x-text="nodeHealthLabel(n.id)"></span>
-                </span>
-                <span x-show="nodeStatuses[n.id]?.version" class="text-[10px] text-gray-400" x-text="nodeStatuses[n.id]?.version"></span>
-              </div>
-              <span class="text-gray-300 text-xs" x-text="expandedNodes[n.id]?'▾':'▸'"></span>
+        <div class="node">
+          <div class="node-head" @click="toggleNodeDetail(n)">
+            <span class="dot" :class="n.enabled?'ok':'idle'"></span>
+            <span class="node-title" x-text="n.name"></span>
+            <span class="node-meta" style="color:var(--accent-text)" x-text="n.domain||''"></span>
+            <span class="node-meta" style="color:var(--muted)" x-text="n.host"></span>
+            <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
+              <span class="reorder" @click.stop>
+                <button @click.stop="moveNode(n,-1)" title="Move up">▲</button>
+                <button @click.stop="moveNode(n,1)" title="Move down">▼</button>
+              </span>
+              <span x-show="nodeStatusLoading[n.id]" class="sub" style="display:inline-flex;align-items:center;gap:5px;font-size:11px">
+                <span class="spin">↻</span><span x-text="T('checking')"></span>
+              </span>
+              <span x-show="!nodeStatusLoading[n.id]" class="chip" :class="nodeHealthBadgeClass(n.id)">
+                <span class="dot" :class="nodeHealthDotClass(n.id)"></span><span x-text="nodeHealthLabel(n.id)"></span>
+              </span>
+              <span x-show="nodeStatuses[n.id]?.version" class="tag" x-text="nodeStatuses[n.id]?.version"></span>
+              <span class="caret" x-text="expandedNodes[n.id]?'▾':'▸'"></span>
             </div>
           </div>
-          <!-- Expanded Detail -->
-          <div x-show="expandedNodes[n.id]" class="border-t border-gray-100">
-            <!-- Action Buttons -->
-            <div class="px-4 py-3 bg-gray-50/80 flex flex-wrap items-center gap-2 border-b border-gray-100">
-              <button @click.stop="checkNodeStatus(n)" :disabled="nodeStatusLoading[n.id]"
-                      class="px-2.5 py-1.5 text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-md transition disabled:opacity-50 inline-flex items-center gap-1">
-                <span :class="nodeStatusLoading[n.id]?'spin':''">↻</span>
-                <span x-text="lang==='zh'?'刷新状态':'Refresh status'"></span>
+          <div x-show="expandedNodes[n.id]" class="node-body">
+            <div class="node-actions">
+              <button @click.stop="checkNodeStatus(n)" :disabled="nodeStatusLoading[n.id]" class="btn btn-sm">
+                <span :class="nodeStatusLoading[n.id]?'spin':''">↻</span><span x-text="T('refreshStatus')"></span>
               </button>
-              <button @click.stop="showSetupSSHModal(n)" class="px-2.5 py-1.5 text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-md transition" x-text="T('setupSSH')"></button>
-              <button @click.stop="installSingbox(n)" class="px-2.5 py-1.5 text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-md transition" x-text="T('install')"></button>
-              <button @click.stop="showAutoSetupModal(n)" class="px-2.5 py-1.5 text-xs border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-md transition font-medium" x-text="T('autoSetup')"></button>
-              <div class="flex-1"></div>
-              <button @click.stop="pushNode(n)" class="px-2.5 py-1.5 text-xs border border-orange-200 bg-orange-50 hover:bg-orange-100 text-orange-700 rounded-md transition" x-text="T('push')"></button>
-              <button @click.stop="generateNode(n)" class="px-2.5 py-1.5 text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-md transition" x-text="T('preview')"></button>
-              <button @click.stop="showRawConfig(n)" class="px-2.5 py-1.5 text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 rounded-md transition" x-text="T('rawConfig')"></button>
-              <button @click.stop="deleteNode(n)" class="px-2.5 py-1.5 text-xs border border-red-200 bg-white hover:bg-red-50 text-red-500 rounded-md transition" x-text="T('del')"></button>
+              <button @click.stop="showSetupSSHModal(n)" class="btn btn-sm" x-text="T('setupSSH')"></button>
+              <button @click.stop="installSingbox(n)" class="btn btn-sm" x-text="T('install')"></button>
+              <button @click.stop="showAutoSetupModal(n)" class="btn btn-sm btn-accent-soft" x-text="T('autoSetup')"></button>
+              <button @click.stop="showCertUploadModal(n)" class="btn btn-sm" x-text="T('uploadCert')"></button>
+              <div style="flex:1"></div>
+              <button @click.stop="pushNode(n)" class="btn btn-sm btn-warn" x-text="T('push')"></button>
+              <button @click.stop="generateNode(n)" class="btn btn-sm" x-text="T('preview')"></button>
+              <button @click.stop="showRawConfig(n)" class="btn btn-sm" x-text="T('rawConfig')"></button>
+              <button @click.stop="deleteNode(n)" class="btn btn-sm btn-danger" x-text="T('del')"></button>
             </div>
-            <!-- System Info -->
             <template x-if="nodeStatuses[n.id]&&nodeStatuses[n.id].reachable">
-              <div class="px-4 py-2 bg-gray-50/50 border-b border-gray-100 flex flex-wrap gap-4 text-[11px] text-gray-500">
-                <span x-show="nodeStatuses[n.id].mem_total"><span class="text-gray-400">Mem</span> <span class="font-mono" x-text="fmtBytes(nodeStatuses[n.id].mem_total-nodeStatuses[n.id].mem_available)+' / '+fmtBytes(nodeStatuses[n.id].mem_total)"></span></span>
-                <span x-show="nodeStatuses[n.id].disk_total"><span class="text-gray-400">Disk</span> <span class="font-mono" x-text="fmtBytes(nodeStatuses[n.id].disk_used)+' / '+fmtBytes(nodeStatuses[n.id].disk_total)"></span></span>
-                <span x-show="nodeStatuses[n.id].uptime"><span class="text-gray-400">Up</span> <span class="font-mono" x-text="fmtUptime(nodeStatuses[n.id].uptime)"></span></span>
-                <span x-show="nodeStatuses[n.id].checked_at"><span class="text-gray-400" x-text="lang==='zh'?'检查于':'Checked'"></span> <span class="font-mono" x-text="fmtChecked(nodeStatuses[n.id].checked_at)"></span></span>
+              <div class="sysinfo">
+                <span x-show="nodeStatuses[n.id].mem_total"><b>Mem</b><span class="mono" x-text="fmtBytes(nodeStatuses[n.id].mem_total-nodeStatuses[n.id].mem_available)+' / '+fmtBytes(nodeStatuses[n.id].mem_total)"></span></span>
+                <span x-show="nodeStatuses[n.id].disk_total"><b>Disk</b><span class="mono" x-text="fmtBytes(nodeStatuses[n.id].disk_used)+' / '+fmtBytes(nodeStatuses[n.id].disk_total)"></span></span>
+                <span x-show="nodeStatuses[n.id].uptime"><b>Up</b><span class="mono" x-text="fmtUptime(nodeStatuses[n.id].uptime)"></span></span>
+                <span x-show="nodeStatuses[n.id].checked_at"><b x-text="T('checkedAt')"></b><span class="mono" x-text="fmtChecked(nodeStatuses[n.id].checked_at)"></span></span>
               </div>
             </template>
-            <!-- Inbounds -->
-            <div class="px-4 py-3">
-              <div class="text-xs text-gray-400 mb-2 font-medium" x-text="T('inbounds')"></div>
+            <div class="card-pad">
+              <div class="eyebrow" style="margin-bottom:10px" x-text="T('inbounds')"></div>
               <template x-if="nodeDetails[n.id]">
-                <div class="space-y-1">
+                <div style="display:flex;flex-direction:column;gap:2px">
                   <template x-for="ib in nodeDetails[n.id].inbounds||[]" :key="ib.id">
-                    <div class="flex items-center gap-3 text-xs py-1.5 px-2 rounded hover:bg-gray-50">
-                      <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium"
-                            :class="ib.protocol==='hysteria2'?'bg-purple-100 text-purple-700':ib.protocol==='vless-reality'?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'"
-                            x-text="ib.protocol"></span>
-                      <span class="text-gray-700 font-mono" x-text="':'+ib.port"></span>
+                    <div class="inbound">
+                      <span class="chip proto" x-text="ib.protocol"></span>
+                      <span class="mono" style="font-weight:600" x-text="':'+ib.port"></span>
                       <template x-if="inboundStatus(n.id,ib.id)">
-                        <span class="inline-flex items-center gap-1 text-[10px]"
-                              :class="inboundStatus(n.id,ib.id).listening===true?'text-emerald-600':inboundStatus(n.id,ib.id).listening===false?'text-red-500':'text-gray-400'">
-                          <span class="w-1.5 h-1.5 rounded-full" :class="inboundStatus(n.id,ib.id).listening===true?'bg-emerald-500':inboundStatus(n.id,ib.id).listening===false?'bg-red-400':'bg-gray-300'"></span>
-                          <span x-text="inboundStatus(n.id,ib.id).listening===true?(lang==='zh'?'监听中':'listening'):inboundStatus(n.id,ib.id).listening===false?(lang==='zh'?'未监听':'not listening'):(lang==='zh'?'未知':'unknown')"></span>
+                        <span class="chip" :class="inboundStatus(n.id,ib.id).listening===true?'ok':inboundStatus(n.id,ib.id).listening===false?'bad':'idle'">
+                          <span class="dot" :class="inboundStatus(n.id,ib.id).listening===true?'ok':inboundStatus(n.id,ib.id).listening===false?'bad':'idle'"></span>
+                          <span x-text="inboundStatus(n.id,ib.id).listening===true?T('listening'):inboundStatus(n.id,ib.id).listening===false?T('notListening'):T('unknown')"></span>
                         </span>
                       </template>
-                      <span class="text-gray-400" x-text="ib.tag"></span>
-                      <div class="ml-auto flex items-center gap-1">
-                        <button @click.stop="moveInbound(n,ib,-1)" class="text-gray-300 hover:text-gray-600 px-0.5">▲</button>
-                        <button @click.stop="moveInbound(n,ib,1)" class="text-gray-300 hover:text-gray-600 px-0.5">▼</button>
-                        <button @click.stop="deleteInbound(ib)" class="text-red-300 hover:text-red-500 transition text-[10px] ml-1">✕</button>
+                      <span class="tag" x-text="ib.tag"></span>
+                      <div style="margin-left:auto;display:flex;align-items:center;gap:4px" @click.stop>
+                        <span class="reorder">
+                          <button @click.stop="moveInbound(n,ib,-1)">▲</button>
+                          <button @click.stop="moveInbound(n,ib,1)">▼</button>
+                        </span>
+                        <button @click.stop="deleteInbound(ib)" class="mini-btn danger" style="padding:3px 7px">✕</button>
                       </div>
                     </div>
                   </template>
-                  <div x-show="!(nodeDetails[n.id]?.inbounds?.length)" class="text-xs text-gray-400 italic py-1" x-text="T('noInbounds')"></div>
+                  <div x-show="!(nodeDetails[n.id]?.inbounds?.length)" class="sub" style="font-style:italic;padding:6px 2px" x-text="T('noInbounds')"></div>
                 </div>
               </template>
             </div>
           </div>
         </div>
       </template>
+      <div x-show="!nodes.length" class="card card-pad sub" style="text-align:center;padding:32px" x-text="lang==='zh'?'暂无节点，点击右上角新建':'No nodes — create one from the top right'"></div>
     </div>
   </div>
 
   <!-- Stats Tab -->
   <div x-show="tab==='stats'" x-init="$watch('tab',v=>{if(v==='stats')loadStats()})">
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold text-gray-900" x-text="T('trafficStats')"></h2>
-      <select x-model="statsDays" @change="loadStats()" class="px-2 py-1 text-xs border border-gray-200 rounded-lg bg-white">
-        <option value="7">7 days</option>
-        <option value="14">14 days</option>
-        <option value="30">30 days</option>
+    <div class="page-head">
+      <h2 class="page-title" x-text="T('trafficStats')"></h2>
+      <select x-model="statsDays" @change="loadStats()" class="input" style="width:auto">
+        <option value="7" x-text="T('days7')"></option>
+        <option value="14" x-text="T('days14')"></option>
+        <option value="30" x-text="T('days30')"></option>
       </select>
     </div>
-    <!-- Chart -->
-    <div class="bg-white border border-gray-200 rounded-xl p-4 mb-4">
-      <div class="text-xs text-gray-400 mb-2" x-text="lang==='zh'?'每日流量趋势':'Daily Traffic Trend'"></div>
-      <div class="h-40 relative" x-ref="chartWrap">
-        <svg width="100%" height="100%" :viewBox="'0 0 '+(statsChart.w||600)+' 160'" preserveAspectRatio="none" x-show="statsChart.points?.length">
-          <polyline :points="statsChart.upLine||''" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linejoin="round"/>
-          <polyline :points="statsChart.downLine||''" fill="none" stroke="#22c55e" stroke-width="2" stroke-linejoin="round"/>
+    <div class="card card-pad" style="margin-bottom:14px">
+      <div class="eyebrow" style="margin-bottom:12px" x-text="T('dailyTrend')"></div>
+      <div style="height:172px;position:relative" x-ref="chartWrap">
+        <svg width="100%" height="100%" :viewBox="'0 0 '+(statsChart.w||600)+' 160'" preserveAspectRatio="none" x-show="statsChart.points?.length" style="overflow:visible">
+          <template x-for="gy in statsChart.grid||[]" :key="gy">
+            <line x1="0" :x2="statsChart.w||600" :y1="gy" :y2="gy" stroke="var(--border)" stroke-width="1" stroke-dasharray="3 4"/>
+          </template>
+          <polygon :points="statsChart.downArea||''" fill="var(--down)" opacity="0.10"/>
+          <polygon :points="statsChart.upArea||''" fill="var(--up)" opacity="0.10"/>
+          <polyline :points="statsChart.downLine||''" fill="none" stroke="var(--down)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+          <polyline :points="statsChart.upLine||''" fill="none" stroke="var(--up)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
           <template x-for="(p,i) in statsChart.points||[]" :key="i">
             <g>
-              <circle :cx="p.x" :cy="p.uy" r="3" fill="#3b82f6" opacity="0.7"/>
-              <circle :cx="p.x" :cy="p.dy" r="3" fill="#22c55e" opacity="0.7"/>
-              <title x-text="p.day+' ↑'+fmtBytes(p.up)+' ↓'+fmtBytes(p.down)"></title>
+              <circle :cx="p.x" :cy="p.dy" :r="i===(statsChart.points.length-1)?4:2.5" fill="var(--down)"/>
+              <circle :cx="p.x" :cy="p.uy" :r="i===(statsChart.points.length-1)?4:2.5" fill="var(--up)"/>
+              <title x-text="p.day+'  ↑'+fmtBytes(p.up)+'  ↓'+fmtBytes(p.down)"></title>
             </g>
           </template>
         </svg>
-        <div x-show="!statsChart.points?.length" class="absolute inset-0 flex items-center justify-center text-xs text-gray-300" x-text="lang==='zh'?'暂无数据':'No data'"></div>
+        <div x-show="!statsChart.points?.length" style="position:absolute;inset:0;display:grid;place-items:center" class="sub" x-text="T('noData')"></div>
       </div>
-      <div class="flex items-center gap-4 mt-2 text-[11px] text-gray-400">
-        <span><span class="inline-block w-3 h-0.5 bg-blue-500 mr-1 align-middle"></span>Upload</span>
-        <span><span class="inline-block w-3 h-0.5 bg-emerald-500 mr-1 align-middle"></span>Download</span>
+      <div style="display:flex;gap:18px;margin-top:12px" class="sub">
+        <span style="display:inline-flex;align-items:center;gap:6px"><span style="width:14px;height:3px;border-radius:2px;background:var(--up);display:inline-block"></span><span x-text="T('upload')"></span></span>
+        <span style="display:inline-flex;align-items:center;gap:6px"><span style="width:14px;height:3px;border-radius:2px;background:var(--down);display:inline-block"></span><span x-text="T('download')"></span></span>
       </div>
     </div>
-    <!-- User stats -->
-    <div class="bg-white border border-gray-200 rounded-xl overflow-hidden mb-4">
-      <div class="px-4 py-2 border-b border-gray-100 text-xs text-gray-400 font-medium" x-text="lang==='zh'?'用户流量':'User Traffic'"></div>
-      <table class="w-full text-sm">
-        <thead><tr class="border-b border-gray-100 text-xs text-gray-400 uppercase tracking-wider">
-          <th class="px-4 py-2 text-left" x-text="T('user')"></th>
-          <th class="px-4 py-2 text-left">↑ Upload</th>
-          <th class="px-4 py-2 text-left">↓ Download</th>
-          <th class="px-4 py-2 text-left" x-text="T('limit')"></th>
-          <th class="px-4 py-2 text-left" x-text="T('usage')"></th>
+    <div class="card table-wrap" style="margin-bottom:14px">
+      <div class="card-head"><span class="eyebrow" x-text="T('userTraffic')"></span></div>
+      <table class="tbl">
+        <thead><tr>
+          <th x-text="T('user')"></th><th x-text="'↑ '+T('upload')"></th><th x-text="'↓ '+T('download')"></th>
+          <th x-text="T('limit')"></th><th x-text="T('usage')"></th>
         </tr></thead>
         <tbody>
         <template x-for="s in statsUsers" :key="s.id">
-          <tr class="border-b border-gray-50">
-            <td class="px-4 py-2 text-gray-700" x-text="s.name"></td>
-            <td class="px-4 py-2 text-xs font-mono text-blue-500" x-text="fmtBytes(s.up_bytes||0)"></td>
-            <td class="px-4 py-2 text-xs font-mono text-emerald-500" x-text="fmtBytes(s.down_bytes||0)"></td>
-            <td class="px-4 py-2 text-xs font-mono text-gray-500" x-text="s.limit_bytes?fmtBytes(s.limit_bytes):'∞'"></td>
-            <td class="px-4 py-2">
-              <div class="w-24 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                <div class="h-full rounded-full" :class="s.limit_bytes&&s.used_bytes/s.limit_bytes>0.8?'bg-red-500':'bg-blue-500'"
-                     :style="'width:'+Math.min(100,s.limit_bytes?Math.round(s.used_bytes/s.limit_bytes*100):0)+'%'"></div>
-              </div>
-            </td>
+          <tr>
+            <td style="font-weight:600" x-text="s.name"></td>
+            <td class="mono" style="color:var(--up)" x-text="fmtBytes(s.up_bytes||0)"></td>
+            <td class="mono" style="color:var(--down)" x-text="fmtBytes(s.down_bytes||0)"></td>
+            <td class="mono sub" x-text="s.limit_bytes?fmtBytes(s.limit_bytes):'∞'"></td>
+            <td><div class="bar" style="width:110px"><div class="bar-fill" :class="s.limit_bytes&&s.used_bytes/s.limit_bytes>0.8?'danger':''"
+                :style="'width:'+Math.min(100,s.limit_bytes?Math.round(s.used_bytes/s.limit_bytes*100):0)+'%'"></div></div></td>
           </tr>
         </template>
         </tbody>
       </table>
     </div>
-    <!-- Node stats -->
-    <div class="bg-white border border-gray-200 rounded-xl overflow-hidden">
-      <div class="px-4 py-2 border-b border-gray-100 text-xs text-gray-400 font-medium" x-text="lang==='zh'?'节点流量':'Node Traffic'"></div>
-      <table class="w-full text-sm">
-        <thead><tr class="border-b border-gray-100 text-xs text-gray-400 uppercase tracking-wider">
-          <th class="px-4 py-2 text-left" x-text="T('nodes')"></th>
-          <th class="px-4 py-2 text-left">↑ Upload</th>
-          <th class="px-4 py-2 text-left">↓ Download</th>
-        </tr></thead>
+    <div class="card table-wrap">
+      <div class="card-head"><span class="eyebrow" x-text="T('nodeTraffic')"></span></div>
+      <table class="tbl">
+        <thead><tr><th x-text="T('nodes')"></th><th x-text="'↑ '+T('upload')"></th><th x-text="'↓ '+T('download')"></th></tr></thead>
         <tbody>
         <template x-for="s in statsNodes" :key="s.id">
-          <tr class="border-b border-gray-50">
-            <td class="px-4 py-2 text-gray-700" x-text="s.name"></td>
-            <td class="px-4 py-2 text-xs font-mono text-blue-500" x-text="fmtBytes(s.up_bytes)"></td>
-            <td class="px-4 py-2 text-xs font-mono text-emerald-500" x-text="fmtBytes(s.down_bytes)"></td>
+          <tr>
+            <td style="font-weight:600" x-text="s.name"></td>
+            <td class="mono" style="color:var(--up)" x-text="fmtBytes(s.up_bytes)"></td>
+            <td class="mono" style="color:var(--down)" x-text="fmtBytes(s.down_bytes)"></td>
           </tr>
         </template>
         </tbody>
@@ -382,239 +590,250 @@
 
   <!-- My Info (user role) -->
   <div x-show="tab==='myinfo'">
-    <h2 class="text-lg font-semibold text-gray-900 mb-4" x-text="T('myInfo')"></h2>
+    <div class="page-head"><h2 class="page-title" x-text="T('myInfo')"></h2></div>
     <template x-if="meData">
-      <div class="space-y-4">
-        <div class="bg-white border border-gray-200 rounded-xl p-5">
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <div class="text-xs text-gray-400 mb-1" x-text="T('username')"></div>
-              <div class="text-sm font-medium text-gray-900" x-text="meData.name"></div>
-            </div>
-            <div>
-              <div class="text-xs text-gray-400 mb-1" x-text="T('expires')"></div>
-              <div class="text-sm text-gray-700" x-text="meData.expire_at||'∞'"></div>
-            </div>
-            <div>
-              <div class="text-xs text-gray-400 mb-1" x-text="T('traffic')"></div>
-              <div class="flex items-center gap-2">
-                <div class="w-24 h-2 bg-gray-100 rounded-full overflow-hidden">
-                  <div class="h-full rounded-full bg-blue-500" :style="'width:'+Math.min(100,meData.traffic_limit_bytes?Math.round(meData.traffic_used_bytes/meData.traffic_limit_bytes*100):0)+'%'"></div>
-                </div>
-                <span class="text-xs text-gray-500" x-text="fmtBytes(meData.traffic_used_bytes)+' / '+(meData.traffic_limit_bytes?fmtBytes(meData.traffic_limit_bytes):'∞')"></span>
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div class="card card-pad">
+          <div class="grid g-2">
+            <div><div class="eyebrow" x-text="T('username')"></div><div style="font-weight:600;margin-top:5px" x-text="meData.name"></div></div>
+            <div><div class="eyebrow" x-text="T('expires')"></div><div class="num" style="margin-top:5px;color:var(--text-2)" x-text="meData.expire_at||'∞'"></div></div>
+            <div style="grid-column:1/-1">
+              <div class="eyebrow" x-text="T('traffic')"></div>
+              <div style="display:flex;align-items:center;gap:10px;margin-top:7px">
+                <div class="bar" style="width:140px;height:8px"><div class="bar-fill" :style="'width:'+Math.min(100,meData.traffic_limit_bytes?Math.round(meData.traffic_used_bytes/meData.traffic_limit_bytes*100):0)+'%'"></div></div>
+                <span class="bar-label" x-text="fmtBytes(meData.traffic_used_bytes)+' / '+(meData.traffic_limit_bytes?fmtBytes(meData.traffic_limit_bytes):'∞')"></span>
               </div>
             </div>
           </div>
         </div>
-        <div class="bg-white border border-gray-200 rounded-xl p-5">
-          <div class="text-xs text-gray-400 mb-2 font-medium" x-text="T('subscription')"></div>
-          <div class="flex items-center gap-2">
-            <input type="text" readonly :value="location.origin+'/sub/'+meData.sub_token" class="flex-1 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs font-mono text-gray-600">
-            <button @click="navigator.clipboard.writeText(location.origin+'/sub/'+meData.sub_token);toast(T('copied'))" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition" x-text="T('copy')"></button>
+        <div class="card card-pad">
+          <div class="eyebrow" style="margin-bottom:10px" x-text="T('subscription')"></div>
+          <div style="display:flex;gap:8px">
+            <input type="text" readonly :value="location.origin+'/sub/'+meData.sub_token" class="input mono" style="font-size:12px">
+            <button @click="navigator.clipboard.writeText(location.origin+'/sub/'+meData.sub_token);toast(T('copied'))" class="btn btn-primary btn-sm" x-text="T('copy')"></button>
           </div>
-          <div class="flex items-center gap-2 mt-2">
-            <input type="text" readonly :value="location.origin+'/sub/'+meData.sub_token+'?format=clash'" class="flex-1 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs font-mono text-gray-600">
-            <button @click="navigator.clipboard.writeText(location.origin+'/sub/'+meData.sub_token+'?format=clash');toast(T('copied'))" class="px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs rounded-lg transition">Clash</button>
+          <div style="display:flex;gap:8px;margin-top:9px">
+            <input type="text" readonly :value="location.origin+'/sub/'+meData.sub_token+'?format=clash'" class="input mono" style="font-size:12px">
+            <button @click="navigator.clipboard.writeText(location.origin+'/sub/'+meData.sub_token+'?format=clash');toast(T('copied'))" class="btn btn-sm btn-accent-soft">Clash</button>
           </div>
         </div>
-        <div class="bg-white border border-gray-200 rounded-xl p-5">
-          <div class="text-xs text-gray-400 mb-3 font-medium" x-text="T('myNodes')"></div>
+        <div class="card card-pad">
+          <div class="eyebrow" style="margin-bottom:8px" x-text="T('myNodes')"></div>
           <template x-for="n in myNodes" :key="n.id">
-            <div class="flex items-center gap-3 py-2 text-sm">
-              <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
-              <span class="text-gray-900" x-text="n.name"></span>
-              <span class="text-xs text-gray-400 font-mono" x-text="n.domain||''"></span>
+            <div style="display:flex;align-items:center;gap:10px;padding:7px 0;font-size:13.5px">
+              <span class="dot ok"></span><span style="font-weight:600" x-text="n.name"></span>
+              <span class="node-meta" style="color:var(--muted)" x-text="n.domain||''"></span>
             </div>
           </template>
-          <div x-show="!myNodes||myNodes.length===0" class="text-xs text-gray-400 italic" x-text="T('noNodes')"></div>
+          <div x-show="!myNodes||myNodes.length===0" class="sub" style="font-style:italic" x-text="T('noNodes')"></div>
         </div>
       </div>
     </template>
   </div>
 
   <!-- Create User Modal -->
-  <div x-show="showCreateUser" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" @click.self="showCreateUser=false">
-    <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-sm shadow-xl">
-      <h3 class="text-sm font-semibold text-gray-900 mb-4" x-text="T('newUser')"></h3>
-      <div class="space-y-3">
-        <input x-model="newUser.name" :placeholder="T('username')" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400">
-        <div class="flex items-center gap-2">
-          <input x-model.number="newUser.traffic_limit_gb" type="number" :placeholder="T('limit')" class="flex-1 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition">
-          <span class="text-xs text-gray-400">GB</span>
+  <div x-show="showCreateUser" class="overlay" @click.self="showCreateUser=false">
+    <div class="modal w-sm">
+      <h3 class="modal-title" x-text="T('newUser')"></h3>
+      <div class="stack" style="margin-top:16px">
+        <input x-model="newUser.name" :placeholder="T('username')" class="input">
+        <div style="display:flex;align-items:center;gap:9px">
+          <input x-model.number="newUser.traffic_limit_gb" type="number" :placeholder="T('limit')" class="input">
+          <span class="sub">GB</span>
         </div>
-        <input x-model="newUser.expire_at" type="date" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition text-gray-500">
+        <input x-model="newUser.expire_at" type="date" class="input" style="color:var(--text-2)">
       </div>
-      <div class="flex justify-end gap-2 mt-5">
-        <button @click="showCreateUser=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition" x-text="T('cancel')"></button>
-        <button @click="createUser()" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition" x-text="T('create')"></button>
+      <div class="modal-foot">
+        <button @click="showCreateUser=false" class="btn-ghost" style="padding:8px 12px;font-size:13px" x-text="T('cancel')"></button>
+        <button @click="createUser()" class="btn btn-primary btn-sm" x-text="T('create')"></button>
       </div>
     </div>
   </div>
 
   <!-- Edit User Modal -->
-  <div x-show="showEditUser" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" @click.self="showEditUser=false">
-    <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-md shadow-xl">
-      <h3 class="text-sm font-semibold text-gray-900 mb-4" x-text="(lang==='zh'?'编辑用户: ':'Edit User: ')+(editingUser?.name||'')"></h3>
-      <div class="space-y-3">
-        <div class="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2.5">
+  <div x-show="showEditUser" class="overlay" @click.self="showEditUser=false">
+    <div class="modal w-md">
+      <h3 class="modal-title" x-text="T('editUser')+(editingUser?.name||'')"></h3>
+      <div class="stack" style="margin-top:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;border:1px solid var(--border);border-radius:9px;padding:11px 13px">
           <div>
-            <label class="text-xs text-gray-700 block" x-text="lang==='zh'?'启用用户':'User enabled'"></label>
-            <span class="text-[11px] text-gray-400" x-text="lang==='zh'?'保存后自动同步节点配置':'Node configs sync automatically after save'"></span>
+            <div class="label" style="margin-bottom:2px" x-text="T('userEnabled')"></div>
+            <span class="hint" style="margin-top:0" x-text="T('syncHint')"></span>
           </div>
-          <button @click="editingUser.enabled=!editingUser.enabled" :class="editingUser.enabled?'bg-emerald-500':'bg-gray-300'" class="relative w-10 h-5 rounded-full transition">
-            <span :class="editingUser.enabled?'translate-x-5':'translate-x-0.5'" class="absolute top-0.5 left-0 w-4 h-4 bg-white rounded-full transition shadow"></span>
-          </button>
+          <button @click="editingUser.enabled=!editingUser.enabled" class="switch" :class="editingUser.enabled?'on':''"><span></span></button>
         </div>
-        <div>
-          <div class="flex items-center justify-between mb-1">
-            <label class="text-xs text-gray-500" x-text="T('nodeAccess')"></label>
-            <div class="flex gap-2">
-              <button @click="editingUser.node_ids=nodes.map(n=>n.id)" class="text-[11px] text-blue-600 hover:text-blue-700" x-text="lang==='zh'?'全选':'All'"></button>
-              <button @click="editingUser.node_ids=[]" class="text-[11px] text-gray-400 hover:text-gray-600" x-text="lang==='zh'?'清空':'None'"></button>
-            </div>
+        <div class="field">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <span class="label" style="margin:0" x-text="T('nodeAccess')"></span>
+            <span style="display:flex;gap:10px">
+              <button @click="editingUser.node_ids=nodes.map(n=>n.id)" class="linkish" x-text="T('selectAll')"></button>
+              <button @click="editingUser.node_ids=[]" class="btn-ghost" style="font-size:12px;padding:0" x-text="T('selectNone')"></button>
+            </span>
           </div>
-          <div class="max-h-40 overflow-y-auto rounded-lg border border-gray-200 divide-y divide-gray-100">
+          <div class="check-list">
             <template x-for="n in nodes" :key="n.id">
-              <label class="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 cursor-pointer">
-                <input type="checkbox" x-model="editingUser.node_ids" :value="n.id"
-                       class="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-0 focus:ring-offset-0">
-                <span class="text-sm text-gray-700" x-text="n.name"></span>
-                <span class="text-xs text-gray-400 ml-auto" x-text="n.domain||n.host"></span>
+              <label class="check-row">
+                <input type="checkbox" x-model="editingUser.node_ids" :value="n.id">
+                <span style="font-weight:500" x-text="n.name"></span>
+                <span class="node-meta" style="margin-left:auto;color:var(--muted)" x-text="n.domain||n.host"></span>
               </label>
             </template>
-            <div x-show="nodes.length===0" class="px-3 py-3 text-xs text-gray-400" x-text="T('noNodes')"></div>
+            <div x-show="nodes.length===0" class="sub" style="padding:11px 13px" x-text="T('noNodes')"></div>
           </div>
         </div>
-        <div>
-          <label class="text-xs text-gray-500 mb-1 block" x-text="lang==='zh'?'流量限额 (GB, 0=无限)':'Traffic Limit (GB, 0=unlimited)'"></label>
-          <input x-model.number="editingUser.traffic_limit_gb" type="number" min="0" step="1" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition">
+        <div class="field">
+          <label class="label" x-text="T('limitLabel')"></label>
+          <input x-model.number="editingUser.traffic_limit_gb" type="number" min="0" step="1" class="input">
         </div>
-        <div>
-          <label class="text-xs text-gray-500 mb-1 block" x-text="lang==='zh'?'到期时间 (留空=无限期)':'Expire Date (empty=never)'"></label>
-          <div class="flex items-center gap-2">
-            <input x-model="editingUser.expire_at" type="date" class="flex-1 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition text-gray-500">
-            <button @click="editingUser.expire_at=''" class="px-2 py-1.5 text-xs text-gray-400 hover:text-gray-700 border border-gray-200 rounded-lg" x-text="lang==='zh'?'无限期':'Never'"></button>
+        <div class="field">
+          <label class="label" x-text="T('expireLabel')"></label>
+          <div style="display:flex;gap:8px">
+            <input x-model="editingUser.expire_at" type="date" class="input" style="color:var(--text-2)">
+            <button @click="editingUser.expire_at=''" class="btn btn-sm" x-text="T('never')"></button>
           </div>
         </div>
-        <div>
-          <label class="text-xs text-gray-500 mb-1 block" x-text="lang==='zh'?'流量重置日 (每月几号, 1-28)':'Traffic Reset Day (1-28)'"></label>
-          <input x-model.number="editingUser.traffic_reset_day" type="number" min="1" max="28" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition">
+        <div class="field">
+          <label class="label" x-text="T('resetDayLabel')"></label>
+          <input x-model.number="editingUser.traffic_reset_day" type="number" min="1" max="28" class="input">
         </div>
       </div>
-      <div class="flex justify-end gap-2 mt-5">
-        <button @click="showEditUser=false" :disabled="savingUser" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition disabled:opacity-50" x-text="T('cancel')"></button>
-        <button @click="saveEditUser()" :disabled="savingUser" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition disabled:opacity-50" x-text="savingUser?T('working'):(lang==='zh'?'保存并同步':'Save & Sync')"></button>
+      <div class="modal-foot" style="justify-content:space-between">
+        <button @click="resetSubToken()" class="btn btn-sm btn-danger" x-text="T('resetSubToken')"></button>
+        <div style="display:flex;gap:8px">
+          <button @click="showEditUser=false" :disabled="savingUser" class="btn-ghost" style="padding:8px 12px;font-size:13px" x-text="T('cancel')"></button>
+          <button @click="saveEditUser()" :disabled="savingUser" class="btn btn-primary btn-sm" x-text="savingUser?T('working'):T('saveSync')"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cert Upload Modal -->
+  <div x-show="showCertUpload" class="overlay" @click.self="showCertUpload=false">
+    <div class="modal w-md">
+      <h3 class="modal-title" x-text="T('uploadCert')"></h3>
+      <p class="sub" style="margin:4px 0 16px" x-text="certNode?certNode.name:''"></p>
+      <div class="stack">
+        <div class="field">
+          <label class="label" x-text="T('domain')"></label>
+          <input x-model="certUpload.domain" :placeholder="T('domainOptional')" class="input">
+        </div>
+        <div class="field">
+          <label class="label" x-text="T('certPem')"></label>
+          <textarea x-model="certUpload.cert" class="codebox" style="min-height:110px" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+        </div>
+        <div class="field">
+          <label class="label" x-text="T('keyPem')"></label>
+          <textarea x-model="certUpload.key" class="codebox" style="min-height:90px" spellcheck="false" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button @click="showCertUpload=false" class="btn-ghost" style="padding:8px 12px;font-size:13px" x-text="T('cancel')"></button>
+        <button @click="doCertUpload()" :disabled="certUploading" class="btn btn-primary btn-sm" x-text="certUploading?T('working'):T('upload')"></button>
       </div>
     </div>
   </div>
 
   <!-- Create Node Modal -->
-  <div x-show="showCreateNode" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" @click.self="showCreateNode=false">
-    <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-md shadow-xl">
-      <h3 class="text-sm font-semibold text-gray-900 mb-4" x-text="T('newNode')"></h3>
-      <div class="space-y-3">
-        <input x-model="newNode.name" :placeholder="T('nodeName')" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400">
-        <input x-model="newNode.host" placeholder="IP (e.g. 1.2.3.4)" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400">
-        <input x-model="newNode.domain" :placeholder="T('domainOptional')" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400">
-        <div class="grid grid-cols-2 gap-3">
-          <div class="flex items-center gap-2">
-            <input x-model.number="newNode.port" type="number" placeholder="SSH Port" class="flex-1 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition">
-          </div>
-          <input x-model="newNode.ssh_user" placeholder="SSH User (root)" class="px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400">
+  <div x-show="showCreateNode" class="overlay" @click.self="showCreateNode=false">
+    <div class="modal w-md">
+      <h3 class="modal-title" x-text="T('newNode')"></h3>
+      <div class="stack" style="margin-top:16px">
+        <input x-model="newNode.name" :placeholder="T('nodeName')" class="input">
+        <input x-model="newNode.host" placeholder="IP (e.g. 1.2.3.4)" class="input mono">
+        <input x-model="newNode.domain" :placeholder="T('domainOptional')" class="input">
+        <div class="grid g-2">
+          <input x-model.number="newNode.port" type="number" placeholder="SSH Port" class="input">
+          <input x-model="newNode.ssh_user" placeholder="SSH User (root)" class="input">
         </div>
       </div>
-      <div class="flex justify-end gap-2 mt-5">
-        <button @click="showCreateNode=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition" x-text="T('cancel')"></button>
-        <button @click="createNode()" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition" x-text="T('create')"></button>
+      <div class="modal-foot">
+        <button @click="showCreateNode=false" class="btn-ghost" style="padding:8px 12px;font-size:13px" x-text="T('cancel')"></button>
+        <button @click="createNode()" class="btn btn-primary btn-sm" x-text="T('create')"></button>
       </div>
     </div>
   </div>
 
   <!-- Setup SSH Modal -->
-  <div x-show="showSSHSetup" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" @click.self="showSSHSetup=false">
-    <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-sm shadow-xl">
-      <h3 class="text-sm font-semibold text-gray-900 mb-1" x-text="T('setupSSH')"></h3>
-      <p class="text-xs text-gray-400 mb-4" x-text="sshNode?sshNode.name+' ('+sshNode.host+')':''"></p>
-      <input x-model="sshPassword" type="password" :placeholder="T('rootPassword')" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400"
-             @keydown.enter="doSetupSSH()">
-      <p class="text-[11px] text-gray-400 mt-2" x-text="T('sshHint')"></p>
-      <div class="flex justify-end gap-2 mt-4">
-        <button @click="showSSHSetup=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition" x-text="T('cancel')"></button>
-        <button @click="doSetupSSH()" :disabled="opLoading" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition disabled:opacity-50" x-text="opLoading?T('working'):T('confirm')"></button>
+  <div x-show="showSSHSetup" class="overlay" @click.self="showSSHSetup=false">
+    <div class="modal w-sm">
+      <h3 class="modal-title" x-text="T('setupSSH')"></h3>
+      <p class="sub" style="margin:4px 0 16px" x-text="sshNode?sshNode.name+' ('+sshNode.host+')':''"></p>
+      <input x-model="sshPassword" type="password" :placeholder="T('rootPassword')" class="input" @keydown.enter="doSetupSSH()">
+      <p class="hint" x-text="T('sshHint')"></p>
+      <div class="modal-foot">
+        <button @click="showSSHSetup=false" class="btn-ghost" style="padding:8px 12px;font-size:13px" x-text="T('cancel')"></button>
+        <button @click="doSetupSSH()" :disabled="opLoading" class="btn btn-primary btn-sm" x-text="opLoading?T('working'):T('confirm')"></button>
       </div>
     </div>
   </div>
 
   <!-- Auto Setup Modal -->
-  <div x-show="showAutoSetup" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" @click.self="showAutoSetup=false">
-    <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-md shadow-xl">
-      <h3 class="text-sm font-semibold text-gray-900 mb-1" x-text="T('autoSetup')"></h3>
-      <p class="text-xs text-gray-400 mb-4" x-text="autoSetupNode?autoSetupNode.name:''"></p>
-      <div class="space-y-3">
-        <div>
-          <label class="text-xs text-gray-500 mb-1 block" x-text="lang==='zh'?'部署模式':'Deployment mode'"></label>
-          <select x-model="autoSetupMode" @change="refreshSetupAssessment(true)" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500">
-            <option value="auto" x-text="lang==='zh'?'自动检测（仅可靠时选择）':'Auto detect (only when conclusive)'"></option>
-            <option value="direct" x-text="lang==='zh'?'域名直连节点':'Domain points directly to node'"></option>
-            <option value="cdn" x-text="lang==='zh'?'CDN / 反向代理':'CDN / reverse proxy'"></option>
-            <option value="reality" x-text="lang==='zh'?'仅 Reality（无需域名）':'Reality only (no domain required)'"></option>
+  <div x-show="showAutoSetup" class="overlay" @click.self="showAutoSetup=false">
+    <div class="modal w-md">
+      <h3 class="modal-title" x-text="T('autoSetup')"></h3>
+      <p class="sub" style="margin:4px 0 16px" x-text="autoSetupNode?autoSetupNode.name:''"></p>
+      <div class="stack">
+        <div class="field">
+          <label class="label" x-text="T('deployMode')"></label>
+          <select x-model="autoSetupMode" @change="refreshSetupAssessment(true)" class="input">
+            <option value="auto" x-text="T('modeAuto')"></option>
+            <option value="direct" x-text="T('modeDirect')"></option>
+            <option value="cdn" x-text="T('modeCdn')"></option>
+            <option value="reality" x-text="T('modeReality')"></option>
           </select>
         </div>
-        <div>
-          <label class="text-xs text-gray-500 mb-1 block" x-text="T('domain')"></label>
-          <input x-model="autoSetupDomain" @change="refreshSetupAssessment(true)" :placeholder="T('domainOptional')" class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm focus:outline-none focus:border-blue-500 transition placeholder-gray-400">
-          <p class="text-[11px] text-gray-400 mt-1" x-text="T('autoSetupDomainHint')"></p>
+        <div class="field">
+          <label class="label" x-text="T('domain')"></label>
+          <input x-model="autoSetupDomain" @change="refreshSetupAssessment(true)" :placeholder="T('domainOptional')" class="input">
+          <p class="hint" x-text="T('autoSetupDomainHint')"></p>
         </div>
-        <div x-show="autoSetupAssessment||autoSetupAssessmentError" class="rounded-lg border px-3 py-2 text-[11px]"
-             :class="autoSetupAssessment?.requires_confirmation||autoSetupAssessmentError?'border-amber-200 bg-amber-50 text-amber-700':'border-emerald-200 bg-emerald-50 text-emerald-700'">
-          <div x-show="assessmentLoading" x-text="lang==='zh'?'检测中…':'Assessing…'"></div>
+        <div x-show="autoSetupAssessment||autoSetupAssessmentError" class="assess"
+             :class="autoSetupAssessment?.requires_confirmation||autoSetupAssessmentError?'warn':'ok'">
+          <div x-show="assessmentLoading" x-text="T('assessing')"></div>
           <div x-show="!assessmentLoading&&autoSetupAssessment">
-            <span x-text="autoSetupAssessment?.dns_status==='not_required'?(lang==='zh'?'无需 DNS 检测':'DNS not required'):(autoSetupAssessment?.direct_to_node?(lang==='zh'?'DNS 直连节点':'DNS points to node'):(lang==='zh'?'DNS 未直连节点':'DNS does not point to node'))"></span>
-            <span x-show="autoSetupAssessment?.dns_records?.length" class="ml-1 font-mono" x-text="'('+autoSetupAssessment.dns_records.join(', ')+')'"></span>
+            <span x-text="autoSetupAssessment?.dns_status==='not_required'?T('dnsNotReq'):(autoSetupAssessment?.direct_to_node?T('dnsDirect'):T('dnsIndirect'))"></span>
+            <span x-show="autoSetupAssessment?.dns_records?.length" class="mono" style="margin-left:4px" x-text="'('+autoSetupAssessment.dns_records.join(', ')+')'"></span>
           </div>
           <div x-show="!assessmentLoading&&autoSetupAssessmentError" x-text="autoSetupAssessmentError"></div>
           <template x-for="warning in autoSetupAssessment?.warnings||[]" :key="warning">
-            <div class="mt-1" x-text="warning"></div>
+            <div style="margin-top:4px" x-text="warning"></div>
           </template>
         </div>
-        <div>
-          <label class="text-xs text-gray-500 mb-1.5 block" x-text="T('protocols')"></label>
-          <div class="space-y-1.5">
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" x-model="autoSetupProtos" value="hysteria2" class="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-0">
-              <span class="text-sm text-gray-700">Hysteria2</span>
-              <span class="text-[10px] text-gray-400 ml-1" x-text="T('needsDomain')"></span>
+        <div class="field">
+          <label class="label" x-text="T('protocols')"></label>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <label class="check-row" style="border:none;padding:2px 0">
+              <input type="checkbox" x-model="autoSetupProtos" value="hysteria2">
+              <span style="font-weight:500">Hysteria2</span><span class="sub" x-text="T('needsDomain')"></span>
             </label>
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" x-model="autoSetupProtos" value="vless-reality" class="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-0">
-              <span class="text-sm text-gray-700">VLESS Reality</span>
-              <span class="text-[10px] text-gray-400 ml-1" x-text="T('noDomain')"></span>
+            <label class="check-row" style="border:none;padding:2px 0">
+              <input type="checkbox" x-model="autoSetupProtos" value="vless-reality">
+              <span style="font-weight:500">VLESS Reality</span><span class="sub" x-text="T('noDomain')"></span>
             </label>
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" x-model="autoSetupProtos" value="vless-httpupgrade" class="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-0">
-              <span class="text-sm text-gray-700">VLESS HTTPUpgrade</span>
-              <span class="text-[10px] text-gray-400 ml-1" x-text="T('forCDN')"></span>
+            <label class="check-row" style="border:none;padding:2px 0">
+              <input type="checkbox" x-model="autoSetupProtos" value="vless-httpupgrade">
+              <span style="font-weight:500">VLESS HTTPUpgrade</span><span class="sub" x-text="T('forCDN')"></span>
             </label>
           </div>
         </div>
       </div>
-      <div class="flex justify-end gap-2 mt-5">
-        <button @click="showAutoSetup=false" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-700 transition" x-text="T('cancel')"></button>
-        <button @click="doAutoSetup()" :disabled="opLoading" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition disabled:opacity-50" x-text="opLoading?T('working'):T('startSetup')"></button>
+      <div class="modal-foot">
+        <button @click="showAutoSetup=false" class="btn-ghost" style="padding:8px 12px;font-size:13px" x-text="T('cancel')"></button>
+        <button @click="doAutoSetup()" :disabled="opLoading" class="btn btn-primary btn-sm" x-text="opLoading?T('working'):T('startSetup')"></button>
       </div>
     </div>
   </div>
 
   <!-- Raw Config Modal -->
-  <div x-show="showRawCfg" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" @click.self="showRawCfg=false">
-    <div class="bg-white border border-gray-200 rounded-xl p-6 w-full max-w-2xl shadow-xl max-h-[80vh] flex flex-col">
-      <div class="flex items-center justify-between mb-3">
-        <h3 class="text-sm font-semibold text-gray-900" x-text="T('rawConfig')+' — '+(rawCfgNode?rawCfgNode.name:'')"></h3>
-        <button @click="showRawCfg=false" class="text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>
+  <div x-show="showRawCfg" class="overlay" @click.self="showRawCfg=false">
+    <div class="modal w-lg" style="max-height:82vh;display:flex;flex-direction:column">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <h3 class="modal-title" x-text="T('rawConfig')+' — '+(rawCfgNode?rawCfgNode.name:'')"></h3>
+        <button @click="showRawCfg=false" class="icon-btn">&times;</button>
       </div>
-      <textarea x-model="rawCfgContent" readonly class="flex-1 w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs font-mono focus:outline-none resize-none min-h-[300px] cursor-text" spellcheck="false"></textarea>
-      <div class="flex justify-end mt-3">
-        <button @click="showRawCfg=false" class="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 transition" x-text="lang==='zh'?'关闭':'Close'"></button>
+      <textarea x-model="rawCfgContent" readonly class="codebox" spellcheck="false"></textarea>
+      <div class="modal-foot">
+        <button @click="showRawCfg=false" class="btn btn-sm" x-text="T('close')"></button>
       </div>
     </div>
   </div>
@@ -631,31 +850,55 @@ function fmtChecked(ts){return ts?new Date(ts).toLocaleTimeString([], {hour:'2-d
 
 const I18N={
   en:{overview:'Overview',users:'Users',nodes:'Nodes',stats:'Stats',signOut:'Sign out',signIn:'Sign In',loginHint:'Sign in to continue',
-    totalTraffic:'Total Traffic',user:'User',traffic:'Traffic',expires:'Expires',subscription:'Sub',actions:'Actions',newUser:'New User',newNode:'New Node',
-    copyLink:'copy link',access:'access',reset:'reset',del:'del',push:'Push',preview:'Preview',pushAll:'Push All',inbounds:'Inbounds',
+    totalTraffic:'Total Traffic',user:'User',traffic:'Traffic',expires:'Expires',subscription:'Subscription',actions:'Actions',newUser:'New User',newNode:'New Node',
+    copyLink:'Copy link',access:'access',reset:'Reset',del:'Delete',edit:'Edit',push:'Push',preview:'Preview',pushAll:'Push All',inbounds:'Inbounds',
     noInbounds:'No inbounds — use Auto Setup to configure protocols',trafficStats:'Traffic Stats',used:'Used',limit:'Limit',usage:'Usage',
     username:'Username',password:'Password',cancel:'Cancel',create:'Create',nodeAccess:'Node Access',grantAll:'Grant All',done:'Done',
     nodeName:'Node name',domainOptional:'Domain (optional, for Hysteria2/HTTPUpgrade)',
     setupSSH:'Setup SSH',install:'Install',autoSetup:'Auto Setup',checkStatus:'Status',rawConfig:'Raw Config',
-    rootPassword:'Root password',sshHint:'Inject panel SSH key to the node for key-based auth',confirm:'Confirm',working:'Working...',
+    rootPassword:'Root password',sshHint:'Inject panel SSH key to the node for key-based auth',confirm:'Confirm',working:'Working…',
     domain:'Domain',protocols:'Protocols',needsDomain:'needs domain',noDomain:'no domain needed',forCDN:'for CDN/blocked IP',
     autoSetupDomainHint:'Auto mode selects direct deployment only when DNS points to the node; CDN mode requires explicit confirmation.',
     startSetup:'Start Setup',notInstalled:'not installed',
     register:'Register',myInfo:'My Info',myNodes:'My Nodes',noNodes:'No accessible nodes',copy:'Copy',copied:'Copied',
-    regSuccess:'Registered! Waiting for admin approval.',invalidCreds:'Invalid credentials',notApproved:'Account not yet approved'},
+    regSuccess:'Registered! Waiting for admin approval.',invalidCreds:'Invalid credentials',notApproved:'Account not yet approved',
+    refreshStatus:'Refresh status',checking:'checking',checkedAt:'Checked',listening:'listening',notListening:'not listening',unknown:'unknown',
+    dailyTrend:'Daily Traffic Trend',upload:'Upload',download:'Download',noData:'No data',userTraffic:'User Traffic',nodeTraffic:'Node Traffic',
+    days7:'7 days',days14:'14 days',days30:'30 days',close:'Close',
+    editUser:'Edit user: ',userEnabled:'User enabled',syncHint:'Node configs sync automatically after save',
+    selectAll:'All',selectNone:'None',limitLabel:'Traffic limit (GB, 0 = unlimited)',expireLabel:'Expire date (empty = never)',
+    resetDayLabel:'Traffic reset day (1–28)',never:'Never',saveSync:'Save & Sync',
+    deployMode:'Deployment mode',modeAuto:'Auto detect (only when conclusive)',modeDirect:'Domain points directly to node',
+    modeCdn:'CDN / reverse proxy',modeReality:'Reality only (no domain required)',
+    assessing:'Assessing…',dnsNotReq:'DNS not required',dnsDirect:'DNS points to node',dnsIndirect:'DNS does not point to node',
+    uploadCert:'Upload Cert',resetSubToken:'Reset sub token',certPem:'Certificate (PEM, full chain)',keyPem:'Private key (PEM)',upload:'Upload',
+    resetTokenConfirm:'Regenerate the subscription token? The current subscription link stops working and must be re-imported.',
+    certUploaded:'Certificate uploaded',tokenReset:'Subscription token regenerated'},
   zh:{overview:'概览',users:'用户',nodes:'节点',stats:'统计',signOut:'退出',signIn:'登录',loginHint:'请登录以继续',
     totalTraffic:'总流量',user:'用户',traffic:'流量',expires:'到期',subscription:'订阅',actions:'操作',newUser:'新建用户',newNode:'新建节点',
-    copyLink:'复制链接',access:'权限',reset:'重置',del:'删除',push:'推送',preview:'预览',pushAll:'推送全部',inbounds:'入站协议',
+    copyLink:'复制链接',access:'权限',reset:'重置',del:'删除',edit:'编辑',push:'推送',preview:'预览',pushAll:'推送全部',inbounds:'入站协议',
     noInbounds:'暂无协议 — 使用一键配置添加',trafficStats:'流量统计',used:'已用',limit:'限额',usage:'用量',
     username:'用户名',password:'密码',cancel:'取消',create:'创建',nodeAccess:'节点权限',grantAll:'全部授权',done:'完成',
     nodeName:'节点名称',domainOptional:'域名（可选，Hysteria2/HTTPUpgrade需要）',
     setupSSH:'配置SSH',install:'安装',autoSetup:'一键配置',checkStatus:'检测状态',rawConfig:'原始配置',
-    rootPassword:'Root密码',sshHint:'注入面板SSH公钥到节点，实现免密连接',confirm:'确认',working:'执行中...',
+    rootPassword:'Root密码',sshHint:'注入面板SSH公钥到节点，实现免密连接',confirm:'确认',working:'执行中…',
     domain:'域名',protocols:'协议',needsDomain:'需要域名',noDomain:'无需域名',forCDN:'CDN/被墙IP使用',
     autoSetupDomainHint:'自动模式仅在 DNS 明确直连节点时选择直连部署；CDN 模式必须显式确认。',
     startSetup:'开始配置',notInstalled:'未安装',
     register:'注册',myInfo:'我的信息',myNodes:'我的节点',noNodes:'暂无可用节点',copy:'复制',copied:'已复制',
-    regSuccess:'注册成功，等待管理员审核',invalidCreds:'用户名或密码错误',notApproved:'账号待审核'}
+    regSuccess:'注册成功，等待管理员审核',invalidCreds:'用户名或密码错误',notApproved:'账号待审核',
+    refreshStatus:'刷新状态',checking:'检测中',checkedAt:'检查于',listening:'监听中',notListening:'未监听',unknown:'未知',
+    dailyTrend:'每日流量趋势',upload:'上行',download:'下行',noData:'暂无数据',userTraffic:'用户流量',nodeTraffic:'节点流量',
+    days7:'近 7 天',days14:'近 14 天',days30:'近 30 天',close:'关闭',
+    editUser:'编辑用户：',userEnabled:'启用用户',syncHint:'保存后自动同步节点配置',
+    selectAll:'全选',selectNone:'清空',limitLabel:'流量限额 (GB, 0=无限)',expireLabel:'到期时间（留空=无限期）',
+    resetDayLabel:'流量重置日（每月几号，1-28）',never:'无限期',saveSync:'保存并同步',
+    deployMode:'部署模式',modeAuto:'自动检测（仅可靠时选择）',modeDirect:'域名直连节点',
+    modeCdn:'CDN / 反向代理',modeReality:'仅 Reality（无需域名）',
+    assessing:'检测中…',dnsNotReq:'无需 DNS 检测',dnsDirect:'DNS 直连节点',dnsIndirect:'DNS 未直连节点',
+    uploadCert:'上传证书',resetSubToken:'重置订阅令牌',certPem:'证书（PEM，完整链）',keyPem:'私钥（PEM）',upload:'上传',
+    resetTokenConfirm:'重新生成订阅令牌？当前订阅链接将失效，需要重新导入。',
+    certUploaded:'证书已上传',tokenReset:'订阅令牌已重新生成'}
 };
 
 function app(){return{
@@ -665,6 +908,7 @@ function app(){return{
   loginUser:'',loginPass:'',
   showRegForm:false,regUser:'',regPass:'',
   lang:localStorage.getItem('panel_lang')||(navigator.language.startsWith('zh')?'zh':'en'),
+  theme:document.documentElement.getAttribute('data-theme')||'light',
   tab:'',
   users:[],nodes:[],statsUsers:[],statsNodes:[],statsDays:'7',statsChart:{},
   meData:null,myNodes:[],
@@ -681,10 +925,12 @@ function app(){return{
   showAutoSetup:false,autoSetupNode:null,autoSetupDomain:'',autoSetupMode:'auto',autoSetupProtos:[],
   autoSetupAssessment:null,autoSetupAssessmentError:'',assessmentLoading:false,autoSetupHasExisting:false,
   showRawCfg:false,rawCfgNode:null,rawCfgContent:'',
+  showCertUpload:false,certNode:null,certUpload:{domain:'',cert:'',key:''},certUploading:false,
   opLoading:false,
 
   T(k){return I18N[this.lang]?.[k]||I18N.en[k]||k},
   toggleLang(){this.lang=this.lang==='zh'?'en':'zh';localStorage.setItem('panel_lang',this.lang)},
+  toggleTheme(){this.theme=this.theme==='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',this.theme);localStorage.setItem('panel_theme',this.theme)},
 
   async init(){
     if(this.authed){
@@ -744,16 +990,25 @@ function app(){return{
   },
   buildChart(data){
     if(!data.length){this.statsChart={};return}
-    const w=600, h=140, px=30, py=10;
+    const w=600, h=140, px=30, py=12;
     const maxVal=Math.max(...data.map(d=>Math.max(d.up,d.down)),1);
+    const y=v=>py+(1-v/maxVal)*(h-2*py);
     const points=data.map((d,i)=>{
       const x=px+i*(w-2*px)/(data.length-1||1);
-      return {x, uy:py+(1-d.up/maxVal)*(h-2*py), dy:py+(1-d.down/maxVal)*(h-2*py), day:d.day, up:d.up, down:d.down};
+      return {x, uy:y(d.up), dy:y(d.down), day:d.day, up:d.up, down:d.down};
     });
+    const base=h-py;
+    const area=(sel)=>{
+      if(!points.length)return'';
+      return points[0].x+','+base+' '+points.map(p=>p.x+','+p[sel]).join(' ')+' '+points[points.length-1].x+','+base;
+    };
+    const grid=[py, py+(h-2*py)/2, h-py];
     this.statsChart={
-      w, points,
+      w, points, grid,
       upLine: points.map(p=>p.x+','+p.uy).join(' '),
-      downLine: points.map(p=>p.x+','+p.dy).join(' ')
+      downLine: points.map(p=>p.x+','+p.dy).join(' '),
+      upArea: area('uy'),
+      downArea: area('dy')
     };
   },
   toast(msg,type='success'){this.toasts.push({id:Date.now()+Math.random(),msg,type})},
@@ -830,6 +1085,16 @@ function app(){return{
   copySubLink(u){
     navigator.clipboard.writeText(location.origin+'/sub/'+u.sub_token);
     this.toast(this.lang==='zh'?'订阅链接已复制':'Link copied');
+  },
+  async resetSubToken(){
+    if(!this.editingUser.id)return;
+    if(!confirm(this.T('resetTokenConfirm')))return;
+    try{
+      await this.api('/api/users/'+this.editingUser.id+'/reset-sub-token',{method:'POST'});
+      this.showEditUser=false;
+      this.toast(this.T('tokenReset'));
+      this.loadTab();
+    }catch(e){this.toast(e.message,'error')}
   },
 
   async createNode(){
@@ -958,17 +1223,17 @@ function app(){return{
   },
   nodeHealthBadgeClass(nodeId){
     const state=this.nodeHealthState(nodeId);
-    if(state==='healthy')return'bg-emerald-50 text-emerald-700';
-    if(state==='degraded'||state==='offline'||state==='stopped')return'bg-red-50 text-red-600';
-    if(state==='missing'||state==='partial')return'bg-amber-50 text-amber-700';
-    return'bg-gray-100 text-gray-500';
+    if(state==='healthy')return'ok';
+    if(state==='degraded'||state==='offline'||state==='stopped')return'bad';
+    if(state==='missing'||state==='partial')return'warn';
+    return'idle';
   },
   nodeHealthDotClass(nodeId){
     const state=this.nodeHealthState(nodeId);
-    if(state==='healthy')return'bg-emerald-500';
-    if(state==='degraded'||state==='offline'||state==='stopped')return'bg-red-500';
-    if(state==='missing'||state==='partial')return'bg-amber-400';
-    return'bg-gray-300';
+    if(state==='healthy')return'ok';
+    if(state==='degraded'||state==='offline'||state==='stopped')return'bad';
+    if(state==='missing'||state==='partial')return'warn';
+    return'idle';
   },
   nodeStatusOverview(){
     if(!this.nodes.length)return'';
@@ -1049,6 +1314,17 @@ function app(){return{
       if(this.expandedNodes[this.autoSetupNode.id])this.nodeDetails[this.autoSetupNode.id]=await this.api('/api/nodes/'+this.autoSetupNode.id);
     }catch(e){this.toast(e.message,'error')}
     this.opLoading=false;
+  },
+  showCertUploadModal(n){this.certNode=n;this.certUpload={domain:n.domain||'',cert:'',key:''};this.showCertUpload=true},
+  async doCertUpload(){
+    if(!this.certUpload.cert||!this.certUpload.key){this.toast(this.T('certPem')+' + '+this.T('keyPem'),'error');return}
+    this.certUploading=true;
+    try{
+      const r=await this.api('/api/nodes/'+this.certNode.id+'/cert-upload',{method:'POST',body:JSON.stringify(this.certUpload)});
+      this.toast(this.T('certUploaded')+(r.cert_path?': '+r.cert_path:''));
+      this.showCertUpload=false;
+    }catch(e){this.toast(e.message,'error')}
+    this.certUploading=false;
   },
   async pushNode(n){
     if(!confirm((this.lang==='zh'?'推送配置到 ':'Push config to ')+n.name+'?'))return;
