@@ -37,6 +37,7 @@ func migrate(db *sql.DB) error {
 	db.Exec(`ALTER TABLE node_inbounds ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`)
 	db.Exec(`ALTER TABLE users ADD COLUMN traffic_up_bytes INTEGER NOT NULL DEFAULT 0`)
 	db.Exec(`ALTER TABLE users ADD COLUMN traffic_down_bytes INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE users ADD COLUMN note TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 
