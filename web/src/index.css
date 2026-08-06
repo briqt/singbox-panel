@@ -1,0 +1,51 @@
+/* 定高铺满视口：仅内容区滚动，侧栏固定不动 */
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  overflow: hidden;
+}
+
+/* 滚动条：细、低调、不压正文 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd0d8 transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: #cbd0d8;
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: #aeb4bd;
+}
+
+/* 偏信息密度：白底画布上卡片用单层极浅阴影分隔，内边距收紧 */
+.ant-card {
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+}
+.ant-card > .ant-card-head {
+  min-height: 40px;
+  padding: 0 16px;
+}
+
+/* 节点卡的操作条：浅底分隔，与卡片正文区分 */
+.node-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #fafbfc;
+  border-bottom: 1px solid #f0f2f5;
+}

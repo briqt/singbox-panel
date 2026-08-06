@@ -3,3 +3,6 @@ data/
 *.db
 singbox-panel
 bin/
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep

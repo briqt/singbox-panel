@@ -1,7 +1,17 @@
-.PHONY: build deploy
+.PHONY: web build test deploy
 
-build:
+# 前端产物 web/dist 由 go:embed 打进二进制，任何 go build 之前必须先跑 web。
+# pnpm 经 corepack 调用，无需全局安装（版本锁在 web/package.json 的 packageManager）。
+web:
+	cd web && corepack pnpm install --frozen-lockfile && corepack pnpm build
+	@touch web/dist/.gitkeep  # 入库的占位文件，让未构建前端的克隆也能通过 go build / go test
+
+build: web
 	GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/singbox-panel .
+
+test:
+	go test ./...
+	cd web && corepack pnpm lint
 
 deploy: build
 	ssh $(DEPLOY_HOST) 'mkdir -p /opt/singbox-panel/data'

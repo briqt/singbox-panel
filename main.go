@@ -1,10 +1,12 @@
 package main
 
 import (
-	_ "embed"
+	"embed"
+	"io/fs"
 	"log"
 	"net/http"
 	"strings"
+	_ "time/tzdata" // panel time zone must resolve on hosts without a tz database
 
 	"github.com/briqt/singbox-panel/config"
 	"github.com/briqt/singbox-panel/db"
@@ -12,8 +14,11 @@ import (
 	"github.com/briqt/singbox-panel/model"
 )
 
-//go:embed web/index.html
-var adminHTML []byte
+// The admin SPA is compiled into the binary so a release stays a single file.
+// Build it with `make web` (pnpm build) before `go build`.
+//
+//go:embed all:web/dist
+var webDist embed.FS
 
 func main() {
 	cfg := config.Load()
@@ -27,6 +32,7 @@ func main() {
 	userStore := &model.UserStore{DB: database}
 	nodeStore := &model.NodeStore{DB: database}
 	accessStore := &model.AccessStore{DB: database}
+	trafficStore := &model.TrafficStore{DB: database, Loc: cfg.Location}
 
 	authHandler := &handler.AuthHandler{
 		Users: userStore, AdminUser: cfg.AdminUser,
@@ -34,7 +40,7 @@ func main() {
 	}
 	meHandler := &handler.MeHandler{Users: userStore, Nodes: nodeStore, Access: accessStore}
 	subHandler := &handler.SubscriptionHandler{Users: userStore, Nodes: nodeStore, Access: accessStore}
-	configHandler := &handler.ConfigHandler{Users: userStore, Nodes: nodeStore, Access: accessStore, SSHKeyPath: cfg.SSHKeyPath}
+	configHandler := &handler.ConfigHandler{Users: userStore, Nodes: nodeStore, Access: accessStore, Traffic: trafficStore, SSHKeyPath: cfg.SSHKeyPath}
 	batchHandler := &handler.BatchHandler{Nodes: nodeStore, Config: configHandler}
 	userHandler := &handler.UserHandler{Store: userStore, Access: accessStore, Sync: configHandler}
 	accessHandler := &handler.AccessHandler{Access: accessStore, Nodes: nodeStore, Sync: configHandler}
@@ -42,8 +48,9 @@ func main() {
 	nodeOpsHandler := &handler.NodeOpsHandler{Nodes: nodeStore, Config: configHandler}
 	setupHandler := &handler.SetupHandler{Nodes: nodeStore, Config: configHandler, Ops: nodeOpsHandler}
 	validateHandler := &handler.ValidateHandler{Config: configHandler}
+	statsHandler := &handler.StatsHandler{Users: userStore, Nodes: nodeStore, Traffic: trafficStore}
 
-	trafficPoller := &handler.TrafficPoller{Nodes: nodeStore, Users: userStore, Config: configHandler}
+	trafficPoller := &handler.TrafficPoller{Nodes: nodeStore, Users: userStore, Traffic: trafficStore, Config: configHandler}
 	trafficPoller.Start()
 
 	admin := authHandler.AdminOnly
@@ -51,18 +58,7 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/admin", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(adminHTML)
-	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(adminHTML)
-			return
-		}
-		http.NotFound(w, r)
-	})
+	mux.HandleFunc("/", spaHandler())
 
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -76,6 +72,7 @@ func main() {
 	// User self-service (any authenticated user)
 	mux.HandleFunc("/api/me", auth(meHandler.HandleMe))
 	mux.HandleFunc("/api/me/nodes", auth(meHandler.HandleMyNodes))
+	mux.HandleFunc("/api/me/usage", auth(statsHandler.HandleMyUsage))
 
 	// Admin: User CRUD
 	mux.HandleFunc("/api/users", admin(userHandler.ServeHTTP))
@@ -116,9 +113,10 @@ func main() {
 	// Admin: batch, stats
 	mux.HandleFunc("/api/batch/push-all", admin(batchHandler.PushAll))
 	mux.HandleFunc("/api/batch/template", admin(batchHandler.ApplyTemplate))
-	mux.HandleFunc("/api/stats/users", admin(configHandler.HandleUserStats))
-	mux.HandleFunc("/api/stats/nodes", admin(configHandler.HandleNodeStats))
-	mux.HandleFunc("/api/stats/traffic", admin(configHandler.HandleTrafficHistory))
+	mux.HandleFunc("/api/stats/meta", admin(statsHandler.HandleMeta))
+	mux.HandleFunc("/api/stats/usage", admin(statsHandler.HandleUsage))
+	mux.HandleFunc("/api/stats/users", admin(statsHandler.HandleUserStats))
+	mux.HandleFunc("/api/stats/nodes", admin(statsHandler.HandleNodeStats))
 
 	// Traffic report from node agents (auth via X-Node-Token)
 	mux.HandleFunc("/api/node/report", configHandler.HandleTrafficReport)
@@ -127,8 +125,39 @@ func main() {
 	mux.HandleFunc("/sub/", subHandler.ServeHTTP)
 
 	addr := "127.0.0.1:" + cfg.Port
-	log.Printf("singbox-panel listening on %s", addr)
+	log.Printf("singbox-panel listening on %s (timezone %s)", addr, cfg.Location)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("server error: %v", err)
+	}
+}
+
+// spaHandler serves the built assets and falls back to index.html so client
+// routes survive a reload. Unmatched /api paths stay 404 instead of silently
+// returning HTML.
+func spaHandler() http.HandlerFunc {
+	assets, err := fs.Sub(webDist, "web/dist")
+	if err != nil {
+		log.Fatalf("embedded web assets: %v", err)
+	}
+	index, indexErr := fs.ReadFile(assets, "index.html")
+	files := http.FileServer(http.FS(assets))
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
+		if indexErr != nil {
+			http.Error(w, "frontend not built: run `make web` before building the binary", http.StatusServiceUnavailable)
+			return
+		}
+		if path := strings.TrimPrefix(r.URL.Path, "/"); path != "" {
+			if info, err := fs.Stat(assets, path); err == nil && !info.IsDir() {
+				files.ServeHTTP(w, r)
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(index)
 	}
 }

@@ -3,7 +3,6 @@ package model
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 )
 
 type Node struct {
@@ -357,29 +356,6 @@ func (s *NodeStore) GetByToken(token string) (*Node, error) {
 	}
 	n.Enabled = enabled == 1
 	return &n, nil
-}
-
-func (s *NodeStore) RecordTraffic(nodeID, userID int, up, down int64) {
-	s.DB.Exec(`INSERT INTO traffic_logs (node_id, user_id, bytes_up, bytes_down) VALUES (?, ?, ?, ?)`,
-		nodeID, userID, up, down)
-}
-
-func (s *NodeStore) GetTrafficSum(nodeID int) (up, down int64) {
-	s.DB.QueryRow(`SELECT COALESCE(SUM(bytes_up),0), COALESCE(SUM(bytes_down),0) FROM traffic_logs WHERE node_id = ?`, nodeID).
-		Scan(&up, &down)
-	return
-}
-
-// PruneTrafficLogs deletes traffic_logs rows older than the given number of
-// days. The stats history endpoint never queries beyond 90 days, so anything
-// older is unreadable and only grows the database; this keeps it bounded.
-func (s *NodeStore) PruneTrafficLogs(days int) (int64, error) {
-	res, err := s.DB.Exec(`DELETE FROM traffic_logs WHERE recorded_at < datetime('now', ?)`, fmt.Sprintf("-%d days", days))
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	return n, nil
 }
 
 type ReorderItem struct {

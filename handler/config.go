@@ -19,6 +19,7 @@ type ConfigHandler struct {
 	Users      *model.UserStore
 	Nodes      *model.NodeStore
 	Access     *model.AccessStore
+	Traffic    *model.TrafficStore
 	SSHKeyPath string
 
 	pushLocksMu sync.Mutex
@@ -242,112 +243,10 @@ func (h *ConfigHandler) HandleTrafficReport(w http.ResponseWriter, r *http.Reque
 			continue
 		}
 		h.Users.AddTraffic(user.ID, up, down)
-		h.Nodes.RecordTraffic(node.ID, user.ID, up, down)
+		h.Traffic.Record(node.ID, user.ID, up, down)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-// Stats endpoints
-
-func (h *ConfigHandler) HandleUserStats(w http.ResponseWriter, r *http.Request) {
-	users, err := h.Users.List()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	type UserStat struct {
-		ID         int    `json:"id"`
-		Name       string `json:"name"`
-		Enabled    bool   `json:"enabled"`
-		UsedBytes  int64  `json:"used_bytes"`
-		UpBytes    int64  `json:"up_bytes"`
-		DownBytes  int64  `json:"down_bytes"`
-		LimitBytes int64  `json:"limit_bytes"`
-		ExpireAt   string `json:"expire_at"`
-	}
-	stats := make([]UserStat, 0, len(users))
-	for _, u := range users {
-		stats = append(stats, UserStat{
-			ID: u.ID, Name: u.Name, Enabled: u.Enabled,
-			UsedBytes: u.TrafficUsedBytes, UpBytes: u.TrafficUpBytes, DownBytes: u.TrafficDownBytes,
-			LimitBytes: u.TrafficLimitBytes, ExpireAt: u.ExpireAt,
-		})
-	}
-	writeJSON(w, http.StatusOK, stats)
-}
-
-func (h *ConfigHandler) HandleNodeStats(w http.ResponseWriter, r *http.Request) {
-	nodes, err := h.Nodes.List()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	type NodeStat struct {
-		ID        int    `json:"id"`
-		Name      string `json:"name"`
-		Enabled   bool   `json:"enabled"`
-		UpBytes   int64  `json:"up_bytes"`
-		DownBytes int64  `json:"down_bytes"`
-	}
-	stats := make([]NodeStat, 0, len(nodes))
-	for _, n := range nodes {
-		up, down := h.Nodes.GetTrafficSum(n.ID)
-		stats = append(stats, NodeStat{
-			ID: n.ID, Name: n.Name, Enabled: n.Enabled,
-			UpBytes: up, DownBytes: down,
-		})
-	}
-	writeJSON(w, http.StatusOK, stats)
-}
-
-func (h *ConfigHandler) HandleTrafficHistory(w http.ResponseWriter, r *http.Request) {
-	days := 7
-	if d := r.URL.Query().Get("days"); d != "" {
-		fmt.Sscanf(d, "%d", &days)
-	}
-	if days > 90 {
-		days = 90
-	}
-
-	userID := r.URL.Query().Get("user_id")
-	nodeID := r.URL.Query().Get("node_id")
-
-	query := `SELECT date(recorded_at) as day, SUM(bytes_up) as up, SUM(bytes_down) as down FROM traffic_logs WHERE recorded_at >= date('now', ?)`
-	args := []any{fmt.Sprintf("-%d days", days)}
-
-	if userID != "" {
-		query += " AND user_id = ?"
-		args = append(args, userID)
-	}
-	if nodeID != "" {
-		query += " AND node_id = ?"
-		args = append(args, nodeID)
-	}
-	query += " GROUP BY day ORDER BY day"
-
-	rows, err := h.Nodes.DB.Query(query, args...)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	defer rows.Close()
-
-	type DayTraffic struct {
-		Day  string `json:"day"`
-		Up   int64  `json:"up"`
-		Down int64  `json:"down"`
-	}
-	var result []DayTraffic
-	for rows.Next() {
-		var d DayTraffic
-		rows.Scan(&d.Day, &d.Up, &d.Down)
-		result = append(result, d)
-	}
-	if result == nil {
-		result = []DayTraffic{}
-	}
-	writeJSON(w, http.StatusOK, result)
 }
 
 // SSH helpers

@@ -17,13 +17,17 @@ Personal sing-box proxy node management panel. Full lifecycle: create node → S
 - **Multi-format subscriptions** — base64 (v2rayN/Shadowrocket), Clash Meta YAML (auto-detect via User-Agent)
 - **Certificate management** — ACME via acme.sh with auto-renewal cron
 - **Node health overview** — automatically checks SSH reachability, service state, version, resources, and per-inbound listeners when the node page opens
-- **Admin Web UI** — i18n (zh/en), light theme, full node lifecycle controls
+- **Admin Web UI** — React + Vite + antd SPA compiled into the binary, i18n (zh/en), light theme, full node lifecycle controls
 - **SSH-based operations** — key injection, sing-box install/upgrade, config push with validation
 - **Per-user traffic accounting** — the panel polls each node's sing-box
   `v2ray_api` StatsService and attributes exact per-user uplink/downlink. This
   requires a sing-box binary built with the `with_v2ray_api` tag; `install`
   pulls such a build (see [briqt/sing-box](https://github.com/briqt/sing-box)),
   since upstream release binaries omit it.
+- **Usage analytics** — per user, per day, per node in any combination: daily
+  trend (stacked by user or node), per-user totals with the nodes they used,
+  per-node totals with the users on them, and a day × user × node detail table
+  with CSV export. Users see the same breakdown for their own account.
 - **Traffic enforcement** — over-limit users excluded from sing-box config (connection refused)
 
 ## Deployment
@@ -76,6 +80,7 @@ Environment variables (or `.env` file in working directory):
 | `JWT_SECRET` | _(random per start)_ | Signing key for session tokens. Set it explicitly so sessions survive a restart. |
 | `DATA_DIR` | `/opt/singbox-panel/data` | SQLite database directory |
 | `SSH_KEY_PATH` | `/root/.ssh/id_ed25519` | SSH private key for node management |
+| `TIMEZONE` | `Asia/Shanghai` | Calendar used by usage statistics: which day a sample belongs to and where the retention window starts. Samples themselves are stored in UTC. |
 
 Authentication is username/password: `POST /api/login` with `ADMIN_USER`/`ADMIN_PASS`
 returns a JWT used as `Authorization: Bearer <jwt>` for admin endpoints. Regular
@@ -165,14 +170,32 @@ there is no separate cert-issue or DNS-check endpoint.
 - `GET /sub/{token}?format=clash` — force Clash Meta YAML
 
 ### Stats
-- `GET /api/stats/users` — per-user traffic
-- `GET /api/stats/nodes` — per-node traffic
+- `GET /api/stats/meta` — timezone, today, and the oldest queryable day (`retention_from`)
+- `GET /api/stats/usage?from&to&group&user_id&node_id` — the one aggregation endpoint:
+  `group` takes any combination of `day`, `user`, `node` (empty = a single total row),
+  `from`/`to` are inclusive `YYYY-MM-DD` days in panel time. A range reaching past
+  retention is clamped; a range entirely past it is rejected.
+- `GET /api/stats/users` — cumulative per-user counters (used against the quota)
+- `GET /api/stats/nodes` — per-node traffic over the retained window
+- `GET /api/me/usage?from&to&group` — same aggregation, locked to the caller's account
+
+Usage samples are kept for **3 calendar months** (the current month plus the two
+before it) and pruned daily; the stats API refuses to answer beyond that boundary,
+so charts never imply data the panel no longer has.
 
 ## Building
 
+The admin SPA lives in `web/` (React + Vite + TypeScript + antd, pnpm) and is
+embedded into the binary, so it must be built first:
+
 ```bash
+make web    # cd web && pnpm install && pnpm build  → web/dist
 go build -trimpath -ldflags="-s -w" -o singbox-panel .
 ```
+
+`make build` does both and cross-compiles for linux/amd64; `make deploy` builds and
+ships it to the panel host. `make test` runs `go test ./...` plus the frontend lint.
+For frontend work, `pnpm dev` in `web/` proxies `/api` to a panel running on :2082.
 
 Cross-compile: `GOOS=linux GOARCH=amd64` or `GOARCH=arm64`.
 

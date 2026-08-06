@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS traffic_logs (
 
 CREATE INDEX IF NOT EXISTS idx_traffic_user ON traffic_logs(user_id, recorded_at);
 CREATE INDEX IF NOT EXISTS idx_traffic_node ON traffic_logs(node_id, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_traffic_recorded ON traffic_logs(recorded_at);
 
 CREATE TABLE IF NOT EXISTS user_access (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,

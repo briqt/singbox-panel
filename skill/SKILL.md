@@ -89,8 +89,10 @@ POST /api/nodes/{id}/cert?domain=x.example.com
 # 查看原始配置（只读）
 GET /api/nodes/{id}/raw-config
 
-# 流量统计
-GET /api/stats/users
+# 用量统计（谁、哪天、用了哪个节点）
+GET /api/stats/usage?from=2026-08-01&to=2026-08-06&group=day,user,node
+GET /api/stats/usage?from=2026-08-01&to=2026-08-06&group=user   # 只看每人合计
+GET /api/stats/users   # 累计计数器（配额判定用）
 GET /api/stats/nodes
 
 # 重置流量
@@ -142,8 +144,16 @@ POST /api/users/{id}/reset-traffic
 - `GET /sub/{token}?format=clash` — 强制 Clash 格式
 
 ### 统计
-- `GET /api/stats/users` — 用户流量
-- `GET /api/stats/nodes` — 节点流量
+- `GET /api/stats/meta` — 统计时区、今天、可查询的最早一天（留存边界）
+- `GET /api/stats/usage?from&to&group&user_id&node_id` — 唯一的聚合接口：`group` 可任意组合
+  `day` / `user` / `node`（留空=总计一行），`from`/`to` 为面板时区的 `YYYY-MM-DD` 闭区间；
+  超出留存的区间自动裁剪，整段过期则报错
+- `GET /api/stats/users` — 用户累计计数器（配额判定用）
+- `GET /api/stats/nodes` — 节点流量（留存窗口内）
+- `GET /api/me/usage?from&to&group` — 同一套聚合，锁定为调用者自己
+
+用量样本保留 **3 个自然月**（当月 + 前两个月），每天裁剪一次；查询超出边界会被拒绝。
+时区由面板 `TIMEZONE` 决定（默认 `Asia/Shanghai`）。
 
 ### 公开
 - `POST /api/register` — 用户注册 ({username, password})

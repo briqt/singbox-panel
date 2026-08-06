@@ -8,25 +8,23 @@ import (
 )
 
 type TrafficPoller struct {
-	Nodes  *model.NodeStore
-	Users  *model.UserStore
-	Config *ConfigHandler
+	Nodes   *model.NodeStore
+	Users   *model.UserStore
+	Traffic *model.TrafficStore
+	Config  *ConfigHandler
 }
-
-// trafficLogRetentionDays bounds how long per-poll traffic samples are kept.
-// It must be >= the stats history window (capped at 90 days) so nothing
-// queryable is lost.
-const trafficLogRetentionDays = 90
 
 func (p *TrafficPoller) Start() {
 	go p.loop()
 	go p.retentionLoop()
 }
 
+// retentionLoop keeps usage bounded to the last RetentionMonths calendar
+// months; the stats API refuses to query past that same boundary.
 func (p *TrafficPoller) retentionLoop() {
 	for {
-		if n, err := p.Nodes.PruneTrafficLogs(trafficLogRetentionDays); err == nil && n > 0 {
-			log.Printf("traffic: pruned %d log rows older than %d days", n, trafficLogRetentionDays)
+		if n, err := p.Traffic.Prune(); err == nil && n > 0 {
+			log.Printf("traffic: pruned %d samples recorded before %s", n, p.Traffic.RetentionStart())
 		}
 		time.Sleep(24 * time.Hour)
 	}
@@ -88,7 +86,7 @@ func (p *TrafficPoller) pollNode(node model.Node) {
 			continue
 		}
 		p.Users.AddTraffic(userID, t.Up, t.Down)
-		p.Nodes.RecordTraffic(node.ID, userID, t.Up, t.Down)
+		p.Traffic.Record(node.ID, userID, t.Up, t.Down)
 		log.Printf("traffic: %s@%s +%d↑ +%d↓", name, node.Name, t.Up, t.Down)
 	}
 }
