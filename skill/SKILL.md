@@ -11,8 +11,8 @@ description: 管理 singbox-panel 代理面板——用户管理（创建/启用
 
 - **API**: `https://panel.example.com`
 - **Admin UI**: `https://panel.example.com/admin`
-- **认证**: `Authorization: Bearer <TOKEN>`
-- **获取 Token**: `ssh $(DEPLOY_HOST) 'grep ADMIN_TOKEN /opt/singbox-panel/.env' | cut -d= -f2`
+- **认证**: `POST /api/login` 拿 JWT，后续请求带 `Authorization: Bearer <jwt>`
+- **管理员凭据**: 面板机 `.env` 里的 `ADMIN_USER` / `ADMIN_PASS`
 
 ## 支持的协议（仅此三种）
 
@@ -80,11 +80,11 @@ GET /api/nodes/{id}/status  → {reachable, installed, version, running}
 # 升级 sing-box
 POST /api/nodes/{id}/install  {"version":"latest"}
 
-# DNS 校验
-GET /api/validate/dns?domain=x.example.com&ip=1.2.3.4
+# DNS 与部署模式评估（不改任何东西，只解释判定依据）
+GET /api/nodes/{id}/setup-assessment?mode=auto&domain=node.example.com
 
-# 手动签证书
-POST /api/nodes/{id}/cert?domain=x.example.com
+# 证书：auto-setup 自动签发 Let's Encrypt；CDN 场景手动上传
+POST /api/nodes/{id}/cert-upload  {"domain":"...","cert":"...","key":"..."}
 
 # 查看原始配置（只读）
 GET /api/nodes/{id}/raw-config
@@ -136,8 +136,9 @@ POST /api/users/{id}/reset-traffic
 - `POST /api/batch/push-all` — 推送所有节点
 - `GET /api/nodes/{id}/raw-config` — 只读查看已部署配置；不支持手动写入
 
-### 校验
-- `GET /api/validate/dns?domain=X&ip=Y` — DNS 解析校验
+### 证书
+- `POST /api/nodes/{id}/cert-upload` — 上传证书 + 私钥（CDN / HTTPUpgrade 场景）；
+  直连场景由 auto-setup 自动签发 Let's Encrypt 并配置续期
 
 ### 订阅
 - `GET /sub/{token}` — 订阅 (自动识别客户端格式)
