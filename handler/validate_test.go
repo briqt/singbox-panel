@@ -3,7 +3,7 @@ package handler
 import "testing"
 
 func TestValidDomainName(t *testing.T) {
-	for _, domain := range []string{"node-c.example.com", "xn--fsqu00a.xn--0zwm56d"} {
+	for _, domain := range []string{"node.example.com", "xn--fsqu00a.xn--0zwm56d"} {
 		if !validDomainName(domain) {
 			t.Fatalf("valid domain rejected: %q", domain)
 		}

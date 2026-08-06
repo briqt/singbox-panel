@@ -13,6 +13,9 @@ test:
 	go test ./...
 	cd web && corepack pnpm lint
 
+# 目标面板机：ssh 主机别名或 user@host，按需覆盖 `make deploy DEPLOY_HOST=myhost`
+DEPLOY_HOST ?= singbox-panel-host
+
 deploy: build
 	ssh $(DEPLOY_HOST) 'mkdir -p /opt/singbox-panel/data'
 	scp bin/singbox-panel $(DEPLOY_HOST):/opt/singbox-panel/singbox-panel.new

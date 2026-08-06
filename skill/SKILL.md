@@ -1,16 +1,16 @@
 ---
 name: singbox-panel
-description: 管理 singbox-panel 代理面板——用户管理（创建/启用/禁用/配额/权限）、节点管理（安装/配置/推送/升级）、订阅链接、流量统计。当用户提到代理面板、proxy panel、节点管理、用户流量、订阅链接、singbox-panel、panel.example.com 时使用。也适用于：查看谁在用代理、给某人开通/关闭权限、推送配置到节点、查看流量统计、安装新节点。
+description: 管理 singbox-panel 代理面板——用户管理（创建/启用/禁用/配额/权限）、节点管理（安装/配置/推送/升级）、订阅链接、流量统计。当用户提到代理面板、proxy panel、节点管理、用户流量、订阅链接、singbox-panel 时使用。也适用于：查看谁在用代理、给某人开通/关闭权限、推送配置到节点、查看流量统计、安装新节点。
 ---
 
 # singbox-panel Skill
 
-管理部署在 `panel.example.com` 的代理节点面板。
+管理自建的 sing-box 代理节点面板（面板地址与节点清单不入库，见下方「连接信息」）。
 
 ## 连接信息
 
-- **API**: `https://panel.example.com`
-- **Admin UI**: `https://panel.example.com/admin`
+- **API**: `https://<你的面板域名>`
+- **Admin UI**: 同域根路径 `/`
 - **认证**: `POST /api/login` 拿 JWT，后续请求带 `Authorization: Bearer <jwt>`
 - **管理员凭据**: 面板机 `.env` 里的 `ADMIN_USER` / `ADMIN_PASS`
 
@@ -31,7 +31,7 @@ description: 管理 singbox-panel 代理面板——用户管理（创建/启用
 POST /api/nodes
 {"name":"my-node", "host":"1.2.3.4", "domain":"node.example.com"}
 
-# 2. 配置 SSH（如果 tokyo 的 key 没在目标机器上）
+# 2. 配置 SSH（面板机的公钥还没进目标机器时）
 POST /api/nodes/{id}/setup-ssh
 {"password":"root密码"}
 
@@ -128,7 +128,6 @@ POST /api/users/{id}/reset-traffic
 - `POST /api/nodes/{id}/install` — 安装/升级 sing-box ({version})
 - `GET /api/nodes/{id}/setup-assessment?mode=auto&domain=X` — 检测 DNS 并解释部署模式建议；不会仅凭 DNS 不一致认定为 CDN
 - `POST /api/nodes/{id}/auto-setup` — 幂等配置和域名迁移 ({domain, mode, protocols, ports})；mode 支持 auto/direct/cdn/reality
-- `POST /api/nodes/{id}/cert` — 签发证书 (?domain=)
 
 ### 配置
 - `POST /api/nodes/{id}/generate` — 预览配置
@@ -162,16 +161,12 @@ POST /api/users/{id}/reset-traffic
 
 ## 节点信息
 
-| 节点 | IP | 域名 | 状态 |
-|------|-----|------|------|
-| node-a | <node-ip> | node-a.example.com | 面板服务器 |
-| node-b | <node-ip> | node-b.example.com | 运行中 |
-| node-c | <node-ip> | node-c.example.com | 面板已接管 |
-| de | <node-ipv6> | de.example.com | IPv6/ProxyJump |
+节点清单（名称 / IP / 域名）不入库：面板自己就是权威源，用 `GET /api/nodes` 取。
 
 ## 部署
 
 - 仓库: `github.com/briqt/singbox-panel`
-- 服务: tokyo `/opt/singbox-panel/`, systemd `singbox-panel.service`
+- 服务: 面板机 `/opt/singbox-panel/`, systemd `singbox-panel.service`
 - 反代: Caddy `panel.example.com → 127.0.0.1:2082`
+- 部署: 在仓库根目录 `make deploy DEPLOY_HOST=<你的 ssh 主机别名>`
 - 安装 skill: `npx skills add briqt/singbox-panel -g -y`
