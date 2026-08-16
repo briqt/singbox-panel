@@ -70,6 +70,7 @@ CI（`.github/workflows`）跑 `make test` 后交叉编译 linux 的 amd64 与 a
 - **写入不等于生效，要回读。** `/etc/sysctl.conf` 在整个 `/etc/sysctl.d/` **之后**应用，遗留调优脚本会静默覆盖 drop-in。`nodetune.go` 因此逐键读回生效值，不符的进 `ineffective` 并指明覆盖来源。任何"改了远端配置"的操作都按这个模式写。
 - **新增的检查/门禁，当轮做证伪测试。** 故意把它该抓的东西弄坏，确认真的报警。绿灯只证明被测的量在范围内，不证明要防的事没发生。`TestHostKeyRejectsMismatch` 是范例。
 - **阈值只调到仍能捕捉回归的位置，不调到消音。** 见 `web/vite.config.ts` 的 `chunkSizeWarningLimit`。
+- **前端分包是否生效，看 `dist/index.html` 的 `script` 与 `modulepreload` 列表，不看 chunk 体积表。** 手动命名一个 chunk 会把它拉进入口的预加载列表，体积表上"拆开了"、浏览器首屏照样下载。同理 `manualChunks` 必须按 `node_modules/` 之后的完整包名段匹配——`recharts` 的路径里含 `react`，子串匹配会把图表库塞进首屏。
 
 ## 关键不变量
 
