@@ -27,8 +27,7 @@ make deploy DEPLOY_HOST=<ssh别名>   # 构建 + 上传 + 重启 systemd
 
 ```
 .
-├── AGENTS.md               # 本文件，工程规范
-├── CLAUDE.md -> AGENTS.md  # 符号链接，从结构上保证两者不漂移
+├── AGENTS.md / CLAUDE.md   # 本文件，工程规范（两份独立文件，内容必须一致，改一处要同步另一处）
 ├── README.md               # 功能与部署
 ├── skill/SKILL.md          # Agent 操作手册（API 调用序列）
 ├── main.go                 # 路由装配、探针、SPA fallback
