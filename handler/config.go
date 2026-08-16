@@ -21,9 +21,36 @@ type ConfigHandler struct {
 	Access     *model.AccessStore
 	Traffic    *model.TrafficStore
 	SSHKeyPath string
+	// DataDir is where the pinned SSH host keys live. Empty disables pinning,
+	// which is only meant for tests.
+	DataDir string
 
 	pushLocksMu sync.Mutex
 	pushLocks   map[int]*sync.Mutex
+
+	hostKeysOnce sync.Once
+	hostKeys     *hostKeyStore
+}
+
+// hostKeyCallback pins each node's host key on first contact and verifies it
+// afterwards. With DataDir unset it falls back to accepting any key so unit
+// tests do not need a writable data directory.
+func (h *ConfigHandler) hostKeyCallback() ssh.HostKeyCallback {
+	if h.DataDir == "" {
+		return ssh.InsecureIgnoreHostKey()
+	}
+	h.hostKeysOnce.Do(func() { h.hostKeys = newHostKeyStore(h.DataDir) })
+	return h.hostKeys.callback()
+}
+
+// ForgetHostKey drops the pinned key for a node so the next connection re-pins
+// it. Call this after deliberately rebuilding a node.
+func (h *ConfigHandler) ForgetHostKey(node *model.Node) error {
+	if h.DataDir == "" {
+		return nil
+	}
+	h.hostKeysOnce.Do(func() { h.hostKeys = newHostKeyStore(h.DataDir) })
+	return h.hostKeys.forget(sshDialAddr(node))
 }
 
 type NodeSyncResult struct {
@@ -275,17 +302,21 @@ func (h *ConfigHandler) sshConnect(node *model.Node) (*ssh.Client, error) {
 	config := &ssh.ClientConfig{
 		User:            node.SSHUser,
 		Auth:            authMethods,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: h.hostKeyCallback(),
 		Timeout:         10 * time.Second,
 	}
 
-	// Handle IPv6 addresses properly
+	return ssh.Dial("tcp", sshDialAddr(node), config)
+}
+
+// sshDialAddr renders the node's dial target, bracketing bare IPv6 literals.
+// The host key store keys off this same string, so both must agree.
+func sshDialAddr(node *model.Node) string {
 	host := node.Host
 	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
 		host = "[" + host + "]"
 	}
-	addr := fmt.Sprintf("%s:%d", host, node.Port)
-	return ssh.Dial("tcp", addr, config)
+	return fmt.Sprintf("%s:%d", host, node.Port)
 }
 
 func (h *ConfigHandler) pushViaSSHUnlocked(node *model.Node, configBytes []byte) error {

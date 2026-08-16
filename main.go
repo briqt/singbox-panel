@@ -43,7 +43,7 @@ func main() {
 	}
 	meHandler := &handler.MeHandler{Users: userStore, Nodes: nodeStore, Access: accessStore}
 	subHandler := &handler.SubscriptionHandler{Users: userStore, Nodes: nodeStore, Access: accessStore}
-	configHandler := &handler.ConfigHandler{Users: userStore, Nodes: nodeStore, Access: accessStore, Traffic: trafficStore, SSHKeyPath: cfg.SSHKeyPath}
+	configHandler := &handler.ConfigHandler{Users: userStore, Nodes: nodeStore, Access: accessStore, Traffic: trafficStore, SSHKeyPath: cfg.SSHKeyPath, DataDir: cfg.DataDir}
 	batchHandler := &handler.BatchHandler{Nodes: nodeStore, Config: configHandler}
 	userHandler := &handler.UserHandler{Store: userStore, Access: accessStore, Sync: configHandler}
 	accessHandler := &handler.AccessHandler{Access: accessStore, Nodes: nodeStore, Sync: configHandler}
