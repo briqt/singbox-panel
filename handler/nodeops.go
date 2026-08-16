@@ -38,9 +38,36 @@ func (h *NodeOpsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.install(w, r)
 	case r.Method == http.MethodGet && strings.HasSuffix(path, "/status"):
 		h.getStatus(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/tune"):
+		h.tune(w, r)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// tune re-applies the kernel baseline to an existing node. auto-setup already
+// does this for new nodes; this is the path for nodes that predate the baseline
+// or whose sysctls were changed underneath the panel.
+func (h *NodeOpsHandler) tune(w http.ResponseWriter, r *http.Request) {
+	nodeID := parseNodeIDFromConfigPath(r.URL.Path)
+	node, err := h.Nodes.Get(nodeID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+	client, err := h.Config.sshConnect(node)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ssh connect failed: "+err.Error())
+		return
+	}
+	defer client.Close()
+
+	result, err := applyKernelTuning(client)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"node": node.Name, "kernel_tuning": result})
 }
 
 func (h *NodeOpsHandler) getVersion(w http.ResponseWriter, r *http.Request) {

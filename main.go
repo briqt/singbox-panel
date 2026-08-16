@@ -114,7 +114,7 @@ func main() {
 			configHandler.ServeHTTP(w, r)
 		} else if strings.HasSuffix(path, "/version") || strings.HasSuffix(path, "/install") ||
 			strings.HasSuffix(path, "/upgrade") || strings.HasSuffix(path, "/status") ||
-			strings.HasSuffix(path, "/setup-ssh") {
+			strings.HasSuffix(path, "/tune") || strings.HasSuffix(path, "/setup-ssh") {
 			nodeOpsHandler.ServeHTTP(w, r)
 		} else if strings.HasSuffix(path, "/cert-upload") {
 			validateHandler.HandleCertUpload(w, r)
