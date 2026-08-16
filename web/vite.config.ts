@@ -19,16 +19,31 @@ export default defineConfig({
         // the function form here, not the object map.
         // Order matters: antd pulls in rc-* packages whose paths also contain
         // "react", so it must be matched first.
+        // Match on whole path segments, never on substrings: "recharts"
+        // contains "react", so a loose test drags the 390 kB charting library
+        // into the eagerly preloaded react chunk — the exact opposite of the
+        // goal.
+        //
+        // recharts is deliberately unnamed. Forcing it into a manual chunk puts
+        // it in the entry's modulepreload list, so the browser fetches it on
+        // first paint and the lazy Stats/MyInfo routes save nothing. Left
+        // alone, rolldown places it in a chunk reachable only from those two
+        // routes.
         manualChunks(id: string) {
-          if (!id.includes('node_modules')) return
-          if (id.includes('recharts') || id.includes('d3-') || id.includes('victory-vendor')) {
-            return 'vendor-charts'
-          }
-          if (id.includes('@ant-design/icons')) return 'vendor-icons'
-          if (id.includes('antd') || id.includes('@ant-design') || id.includes('rc-')) {
+          const pkg = id.split('node_modules/').pop()
+          if (!pkg || !id.includes('node_modules')) return
+          const inPkg = (name: string) => pkg === name || pkg.startsWith(name + '/')
+
+          if (inPkg('@ant-design/icons') || inPkg('@ant-design/icons-svg')) return 'vendor-icons'
+          if (inPkg('antd') || pkg.startsWith('@ant-design/') || pkg.startsWith('rc-')) {
             return 'vendor-antd'
           }
-          if (id.includes('react') || id.includes('scheduler')) return 'vendor-react'
+          if (
+            inPkg('react') || inPkg('react-dom') || inPkg('react-is') ||
+            inPkg('react-router') || inPkg('react-router-dom') || inPkg('scheduler')
+          ) {
+            return 'vendor-react'
+          }
         },
       },
     },
