@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Button, Layout, Menu, Space, Tooltip, Typography } from 'antd'
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
+import { Button, Layout, Menu, Space, Spin, Tooltip, Typography } from 'antd'
 import {
   AreaChartOutlined,
   CloudServerOutlined,
@@ -14,12 +14,16 @@ import { COLOR_PRIMARY, NEUTRAL } from './theme'
 import { clearSession, loadSession, setUnauthorizedHandler } from './api'
 import type { Session } from './api'
 import { useI18n } from './i18n'
+// Login stays eager: it is the first paint for anyone without a session, and a
+// suspense flash there would be the worst place to have one. The authenticated
+// pages load on demand — Stats in particular drags in the whole charting
+// library, which nobody needs until they open it.
 import Login from './pages/Login'
-import Overview from './pages/Overview'
-import Users from './pages/Users'
-import Nodes from './pages/Nodes'
-import Stats from './pages/Stats'
-import MyInfo from './pages/MyInfo'
+const Overview = lazy(() => import('./pages/Overview'))
+const Users = lazy(() => import('./pages/Users'))
+const Nodes = lazy(() => import('./pages/Nodes'))
+const Stats = lazy(() => import('./pages/Stats'))
+const MyInfo = lazy(() => import('./pages/MyInfo'))
 
 const { Sider, Content } = Layout
 const { Text } = Typography
@@ -134,19 +138,27 @@ export default function App() {
             boxSizing: 'border-box',
           }}
         >
-          <Routes>
-            {isAdmin ? (
-              <>
-                <Route path="/" element={<Overview />} />
-                <Route path="/users" element={<Users />} />
-                <Route path="/nodes" element={<Nodes />} />
-                <Route path="/stats" element={<Stats />} />
-              </>
-            ) : (
-              <Route path="/me" element={<MyInfo />} />
-            )}
-            <Route path="*" element={<Navigate to={isAdmin ? '/' : '/me'} replace />} />
-          </Routes>
+          <Suspense
+            fallback={
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '64px 0' }}>
+                <Spin />
+              </div>
+            }
+          >
+            <Routes>
+              {isAdmin ? (
+                <>
+                  <Route path="/" element={<Overview />} />
+                  <Route path="/users" element={<Users />} />
+                  <Route path="/nodes" element={<Nodes />} />
+                  <Route path="/stats" element={<Stats />} />
+                </>
+              ) : (
+                <Route path="/me" element={<MyInfo />} />
+              )}
+              <Route path="*" element={<Navigate to={isAdmin ? '/' : '/me'} replace />} />
+            </Routes>
+          </Suspense>
         </Content>
       </Layout>
     </Layout>

@@ -450,8 +450,17 @@ test -f %s && test -f %s && echo "CERT_OK"
 		return
 	}
 
+	// Kernel baseline last: it never blocks the setup. A node whose sysctls did
+	// not take is still a working node, just a slower one, and the caller gets
+	// the read-back so the shortfall is visible instead of silent.
+	tuning, tuneErr := applyKernelTuning(client)
+	if tuneErr != nil {
+		tuning = &KernelTuneResult{Note: "kernel tuning failed: " + tuneErr.Error()}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"inbounds": results, "push": "ok", "sync": syncResults, "node": node.Name, "assessment": assessment,
+		"inbounds": results, "push": "ok", "sync": syncResults, "node": node.Name,
+		"assessment": assessment, "kernel_tuning": tuning,
 	})
 }
 

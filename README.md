@@ -28,6 +28,16 @@ Personal sing-box proxy node management panel. Full lifecycle: create node → S
   trend (stacked by user or node), per-user totals with the nodes they used,
   per-node totals with the users on them, and a day × user × node detail table
   with CSV export. Users see the same breakdown for their own account.
+- **Node kernel baseline** — setup writes a sysctl drop-in tuned for the node's
+  RAM (QUIC/UDP socket buffers for Hysteria2, BBR + fq for Reality) and then
+  **reads the values back**, reporting any key that did not take effect.
+  `/etc/sysctl.conf` is applied after everything in `/etc/sysctl.d`, so a stale
+  tuning script there silently wins; writing the file is not evidence it
+  applied. Re-run on an existing node with `POST /api/nodes/{id}/tune`.
+- **Pinned SSH host keys** — a node's host key is recorded on first contact
+  (`<DATA_DIR>/known_hosts`, standard OpenSSH format) and verified on every
+  later connection; a mismatch refuses the connection. Clear a deliberately
+  rebuilt node with `ssh-keygen -f <DATA_DIR>/known_hosts -R <host>`.
 - **Traffic enforcement** — over-limit users excluded from sing-box config (connection refused)
 
 ## Deployment
@@ -39,6 +49,10 @@ panel.example.com {
     reverse_proxy http://127.0.0.1:2082
 }
 ```
+
+Probes: `GET /api/health` reports only that the process is up (a dependency blip
+must not trigger a restart); `GET /api/ready` checks the database and answers
+**503** when it is unreachable.
 
 ### Quick Start
 

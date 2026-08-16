@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"embed"
+	"encoding/json"
 	"io/fs"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 	_ "time/tzdata" // panel time zone must resolve on hosts without a tz database
 
 	"github.com/briqt/singbox-panel/config"
@@ -40,7 +43,7 @@ func main() {
 	}
 	meHandler := &handler.MeHandler{Users: userStore, Nodes: nodeStore, Access: accessStore}
 	subHandler := &handler.SubscriptionHandler{Users: userStore, Nodes: nodeStore, Access: accessStore}
-	configHandler := &handler.ConfigHandler{Users: userStore, Nodes: nodeStore, Access: accessStore, Traffic: trafficStore, SSHKeyPath: cfg.SSHKeyPath}
+	configHandler := &handler.ConfigHandler{Users: userStore, Nodes: nodeStore, Access: accessStore, Traffic: trafficStore, SSHKeyPath: cfg.SSHKeyPath, DataDir: cfg.DataDir}
 	batchHandler := &handler.BatchHandler{Nodes: nodeStore, Config: configHandler}
 	userHandler := &handler.UserHandler{Store: userStore, Access: accessStore, Sync: configHandler}
 	accessHandler := &handler.AccessHandler{Access: accessStore, Nodes: nodeStore, Sync: configHandler}
@@ -52,6 +55,7 @@ func main() {
 
 	trafficPoller := &handler.TrafficPoller{Nodes: nodeStore, Users: userStore, Traffic: trafficStore, Config: configHandler}
 	trafficPoller.Start()
+	defer trafficPoller.Close()
 
 	admin := authHandler.AdminOnly
 	auth := authHandler.JWTAuth
@@ -60,9 +64,25 @@ func main() {
 
 	mux.HandleFunc("/", spaHandler())
 
+	// Liveness: the process is up. Deliberately checks nothing else, so a
+	// supervisor never restarts the panel just because a dependency blipped.
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	// Readiness: the panel can actually serve. An unreachable database is a 503
+	// so a probe can tell "starting up / degraded" apart from "dead".
+	mux.HandleFunc("/api/ready", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		w.Header().Set("Content-Type", "application/json")
+		if err := database.PingContext(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]any{"status": "unready", "database": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"status": "ready", "database": "ok"})
 	})
 
 	// Public
@@ -94,7 +114,7 @@ func main() {
 			configHandler.ServeHTTP(w, r)
 		} else if strings.HasSuffix(path, "/version") || strings.HasSuffix(path, "/install") ||
 			strings.HasSuffix(path, "/upgrade") || strings.HasSuffix(path, "/status") ||
-			strings.HasSuffix(path, "/setup-ssh") {
+			strings.HasSuffix(path, "/tune") || strings.HasSuffix(path, "/setup-ssh") {
 			nodeOpsHandler.ServeHTTP(w, r)
 		} else if strings.HasSuffix(path, "/cert-upload") {
 			validateHandler.HandleCertUpload(w, r)
