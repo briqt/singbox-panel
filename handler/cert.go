@@ -312,19 +312,26 @@ func (h *NodeOpsHandler) HandleCertRenew(w http.ResponseWriter, r *http.Request)
 			results = append(results, result)
 			continue
 		}
-		// HTTP-01 answers on the node itself, so a domain pointed elsewhere
-		// (a CDN in front, or a stale record) cannot be validated here. Say so
-		// rather than letting acme.sh fail with a wall of debug output.
-		if ips, lookupErr := net.LookupHost(target.Domain); lookupErr != nil {
-			result.Status = "failed"
-			result.Details = "DNS lookup failed: " + lookupErr.Error()
-			results = append(results, result)
-			continue
-		} else if !containsHost(ips, node.Host) {
-			result.Status = "failed"
-			result.Details = fmt.Sprintf("DNS: %s → %v, expected %s; HTTP-01 validates against the node itself", target.Domain, ips, node.Host)
-			results = append(results, result)
-			continue
+		// Only gate on DNS when this run will actually try to issue. A CDN node
+		// points its domain at the CDN on purpose and carries a manually
+		// uploaded origin cert; failing it for "DNS does not point here" would
+		// report a problem that does not exist, and would also block the
+		// cron/log repair the script performs before it looks at the cert.
+		if certNeedsIssuing(result.Before, req.Force) {
+			// HTTP-01 answers on the node itself, so a domain pointed elsewhere
+			// cannot be validated here. Say so rather than letting acme.sh fail
+			// with a wall of debug output.
+			if ips, lookupErr := net.LookupHost(target.Domain); lookupErr != nil {
+				result.Status = "failed"
+				result.Details = "DNS lookup failed: " + lookupErr.Error()
+				results = append(results, result)
+				continue
+			} else if !containsHost(ips, node.Host) {
+				result.Status = "failed"
+				result.Details = fmt.Sprintf("DNS: %s → %v, expected %s; HTTP-01 validates against the node itself", target.Domain, ips, node.Host)
+				results = append(results, result)
+				continue
+			}
 		}
 
 		out, runErr := sshRun(client, renewCertScript(target.Domain, target.CertPath, target.KeyPath, req.Force, certRenewBeforeDays))
@@ -365,6 +372,17 @@ func (h *NodeOpsHandler) HandleCertRenew(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	writeJSON(w, status, map[string]any{"node": node.Name, "renewed": renewed, "certs": results})
+}
+
+// certNeedsIssuing mirrors the freshness gate inside renewCertScript. It exists
+// so the Go side can tell "we are about to ask a CA for a certificate" from
+// "we are only here to repair cron and logging", which have different
+// preconditions: only the former needs the domain to resolve to this node.
+func certNeedsIssuing(before *CertStatus, force bool) bool {
+	if force || before == nil {
+		return true
+	}
+	return before.Error != "" || before.Expired || before.DaysLeft < certRenewBeforeDays
 }
 
 func containsHost(ips []string, host string) bool {

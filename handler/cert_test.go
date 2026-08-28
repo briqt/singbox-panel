@@ -175,6 +175,34 @@ func TestRenewRepairsMachineryBeforeFreshnessGate(t *testing.T) {
 	}
 }
 
+// TestCertNeedsIssuingMatchesShellGate keeps the Go-side predicate and the
+// shell freshness gate from drifting apart. If Go thinks an issue is coming and
+// the script disagrees (or vice versa), the DNS precondition gets applied to the
+// wrong runs — a CDN node would be failed for DNS it is never going to use.
+func TestCertNeedsIssuingMatchesShellGate(t *testing.T) {
+	cases := []struct {
+		name   string
+		before *CertStatus
+		force  bool
+		want   bool
+	}{
+		{"expired", &CertStatus{Expired: true, DaysLeft: -8}, false, true},
+		{"inside threshold", &CertStatus{DaysLeft: certRenewBeforeDays - 1}, false, true},
+		{"on threshold", &CertStatus{DaysLeft: certRenewBeforeDays}, false, false},
+		{"comfortable", &CertStatus{DaysLeft: 89}, false, false},
+		{"forced", &CertStatus{DaysLeft: 89}, true, true},
+		{"unreadable", &CertStatus{Error: "certificate missing or unreadable"}, false, true},
+		{"unknown", nil, false, true},
+		// The CDN case: a 15-year origin cert must not drag in a DNS check.
+		{"origin cert", &CertStatus{DaysLeft: 5407}, false, false},
+	}
+	for _, tc := range cases {
+		if got := certNeedsIssuing(tc.before, tc.force); got != tc.want {
+			t.Errorf("%s: certNeedsIssuing = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestParseCertNotAfter(t *testing.T) {
 	cases := []struct {
 		in   string
