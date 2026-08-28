@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/briqt/singbox-panel/model"
 )
@@ -227,38 +228,26 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 			}
 			certPath := fmt.Sprintf("/etc/sing-box/tls/%s.crt", domain)
 			keyPath := fmt.Sprintf("/etc/sing-box/tls/%s.key", domain)
-			certScript := fmt.Sprintf(`
-mkdir -p /etc/sing-box/tls
-if [ -f %s ] && [ -f %s ]; then echo "CERT_EXISTS"; exit 0; fi
-if ! command -v /root/.acme.sh/acme.sh &>/dev/null; then curl -sL https://get.acme.sh | sh -s email=acme@%s 2>&1; fi
-/root/.acme.sh/acme.sh --set-default-ca --server letsencrypt 2>/dev/null
-# Determine ACME challenge mode
-ACME_MODE="--standalone"
-if command -v caddy &>/dev/null && systemctl is-active caddy &>/dev/null; then
-  # Use Caddy's file_server via a temp webroot
-  WEBROOT="/var/www/acme"
-  mkdir -p "$WEBROOT"
-  ACME_MODE="--webroot $WEBROOT"
-  # Ensure Caddy serves the ACME challenge path
-  if ! grep -q "%s" /etc/caddy/Caddyfile 2>/dev/null; then
-    printf '\nhttp://%s {\n  root * /var/www/acme\n  file_server\n}\n' "%s" >> /etc/caddy/Caddyfile
-    systemctl reload caddy 2>/dev/null; sleep 1
-  fi
-elif ss -tlnp | grep -q ':80 '; then
-  # Something else on port 80 - stop it temporarily
-  PORT80_SVC=$(ss -tlnp | grep ':80 ' | grep -oP 'users:\(\("\K[^"]+' || true)
-  if [ -n "$PORT80_SVC" ]; then systemctl stop "$PORT80_SVC" 2>/dev/null || true; sleep 1; fi
-fi
-/root/.acme.sh/acme.sh --issue -d %s $ACME_MODE --keylength ec-256 --force 2>&1 || true
-# Restart stopped service if standalone was used
-if [ -n "${PORT80_SVC:-}" ]; then systemctl start "$PORT80_SVC" 2>/dev/null || true; fi
-/root/.acme.sh/acme.sh --install-cert -d %s --ecc --fullchain-file %s --key-file %s --reloadcmd "systemctl restart sing-box 2>/dev/null || true" 2>&1
-/root/.acme.sh/acme.sh --install-cronjob 2>/dev/null
-test -f %s && test -f %s && echo "CERT_OK"
-`, certPath, keyPath, domain, domain, domain, domain, domain, domain, certPath, keyPath, certPath, keyPath)
-			certOut, _ := sshRun(client, certScript)
-			if certOut == "" || (!contains(certOut, "CERT_OK") && !contains(certOut, "CERT_EXISTS")) {
-				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: "cert install failed"})
+			// Shares renewCertScript with the renew endpoint so there is one
+			// authority for how a cert gets issued. It skips work only when the
+			// existing cert is *valid*, not merely present.
+			certOut, certErr := sshRun(client, renewCertScript(domain, certPath, keyPath, false, certRenewBeforeDays))
+			certTgt := certTarget{Protocol: proto, Domain: domain, CertPath: certPath, KeyPath: keyPath}
+			certState := readCertStatuses(client, []certTarget{certTgt}, time.Now())[certTgt.InboundID]
+			if certState == nil || certState.Error != "" || certState.Expired {
+				details := "cert install failed"
+				if certState != nil && certState.Error != "" {
+					details = "cert install failed: " + certState.Error
+				} else if certState != nil && certState.Expired {
+					details = "cert install failed: certificate on node is expired"
+				}
+				if certErr != nil {
+					details += "; ssh: " + certErr.Error()
+				}
+				if tail := tailLines(certOut, 5); tail != "" {
+					details += "; acme: " + tail
+				}
+				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: details})
 				hadError = true
 				continue
 			}

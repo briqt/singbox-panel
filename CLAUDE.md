@@ -22,6 +22,7 @@ make deploy DEPLOY_HOST=<ssh别名>   # 构建 + 上传 + 重启 systemd
 | `GET /api/health` | 存活探针。**只报进程活着**，不查任何依赖——依赖抖动不该触发重启 |
 | `GET /api/ready` | 就绪探针。查数据库可达性，不可达返 **503** |
 | `POST /api/nodes/{id}/tune` | 对存量节点重新应用内核基线并回读校验 |
+| `POST /api/nodes/{id}/cert-renew` | 重签 TLS 入站的证书并回读校验，不动端口与 Reality 密钥（`{"force":true}` 可无视有效期强制重签） |
 
 ## 仓库结构
 
@@ -40,7 +41,8 @@ make deploy DEPLOY_HOST=<ssh别名>   # 构建 + 上传 + 重启 systemd
 │   ├── hostkey.go          #   节点主机密钥固定（TOFU）
 │   ├── nodetune.go         #   节点内核基线 + 回读校验
 │   ├── traffic.go          #   流量轮询器
-│   ├── nodeops.go          #   装/升级/状态/tune
+│   ├── cert.go             #   TLS 证书签发/续期/到期回读（单一权威）
+│   ├── nodeops.go          #   装/升级/状态/tune/cert-renew
 │   └── setup.go            #   一键纳管
 ├── singbox/                # sing-box 配置与 Clash 订阅生成
 ├── web/                    # React + Vite + antd SPA（dist 入库占位，node_modules 不入库）
@@ -68,6 +70,9 @@ CI（`.github/workflows`）跑 `make test` 后交叉编译 linux 的 amd64 与 a
 ### 判据
 
 - **写入不等于生效，要回读。** `/etc/sysctl.conf` 在整个 `/etc/sysctl.d/` **之后**应用，遗留调优脚本会静默覆盖 drop-in。`nodetune.go` 因此逐键读回生效值，不符的进 `ineffective` 并指明覆盖来源。任何"改了远端配置"的操作都按这个模式写。
+- **文件存在不等于内容有效。** 证书曾用 `[ -f cert ]` 判断"已就绪"，于是一张过期两个月的证书照样让 auto-setup 报成功、让节点在面板上显示健康，而所有 hysteria2 客户端都握手失败。判据要落在被检查的**性质**上（`openssl -checkend`），不是承载它的文件上。同理监听着的端口不代表入站可用，`healthState` 因此把证书过期排在监听检查之前。
+- **凭据/CA 这类"记在别处"的状态，改默认值不会改已有记录。** `acme.sh --set-default-ca` 只影响新域名；已有域名记着自己的 `Le_API`，在别的 CA 上建的记录会一直回那个 CA 续期，若其账户凭据从未存过（ZeroSSL 要 EAB）就永久失败。因此 `--issue` 必须显式带 `--server`，`TestRenewScriptPinsCAOnIssue` 守这条。
+- **静默的定时任务等于没有。** acme.sh 不设 `LOG_FILE` 就不写日志，`--install-cronjob` 装的 cron 又把 stdout 丢进 `/dev/null`，续期失败五周无人知晓直到证书过期。装计划任务时一并把日志落地。
 - **新增的检查/门禁，当轮做证伪测试。** 故意把它该抓的东西弄坏，确认真的报警。绿灯只证明被测的量在范围内，不证明要防的事没发生。`TestHostKeyRejectsMismatch` 是范例。
 - **阈值只调到仍能捕捉回归的位置，不调到消音。** 见 `web/vite.config.ts` 的 `chunkSizeWarningLimit`。
 - **前端分包是否生效，看 `dist/index.html` 的 `script` 与 `modulepreload` 列表，不看 chunk 体积表。** 手动命名一个 chunk 会把它拉进入口的预加载列表，体积表上"拆开了"、浏览器首屏照样下载。同理 `manualChunks` 必须按 `node_modules/` 之后的完整包名段匹配——`recharts` 的路径里含 `react`，子串匹配会把图表库塞进首屏。

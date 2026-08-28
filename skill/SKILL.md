@@ -86,6 +86,12 @@ GET /api/nodes/{id}/setup-assessment?mode=auto&domain=node.example.com
 # 证书：auto-setup 自动签发 Let's Encrypt；CDN 场景手动上传
 POST /api/nodes/{id}/cert-upload  {"domain":"...","cert":"...","key":"..."}
 
+# 证书续期（剩余不足 30 天才重签，重签会重启该节点 sing-box）
+POST /api/nodes/{id}/cert-renew            # 到期才续
+POST /api/nodes/{id}/cert-renew  {"force":true}   # 强制重签
+# 返回每张证书的 before/after 到期时间与 status: renewed | fresh | failed
+# 到期天数也在节点状态里：GET /api/nodes/{id}/status → inbounds[].cert.days_left
+
 # 查看原始配置（只读）
 GET /api/nodes/{id}/raw-config
 
@@ -122,7 +128,8 @@ POST /api/users/{id}/reset-traffic
 - `DELETE /api/inbounds/{id}` — 删除协议并立即同步节点，失败回滚
 
 ### 节点运维
-- `GET /api/nodes/{id}/status` — SSH 连通性、sing-box 状态和各入站 TCP/UDP 监听状态
+- `GET /api/nodes/{id}/status` — SSH 连通性、sing-box 状态、各入站 TCP/UDP 监听状态，
+  以及各 TLS 入站的证书到期天数（`inbounds[].cert`、`cert_days_left` 取最差的一张）
 - `GET /api/nodes/{id}/version` — sing-box 版本
 - `POST /api/nodes/{id}/setup-ssh` — 注入公钥 ({password})
 - `POST /api/nodes/{id}/install` — 安装/升级 sing-box ({version})
@@ -138,6 +145,9 @@ POST /api/users/{id}/reset-traffic
 ### 证书
 - `POST /api/nodes/{id}/cert-upload` — 上传证书 + 私钥（CDN / HTTPUpgrade 场景）；
   直连场景由 auto-setup 自动签发 Let's Encrypt 并配置续期
+- `POST /api/nodes/{id}/cert-renew` — 重签 TLS 入站证书（`{"force":true}` 无视有效期）。
+  只碰证书，不动端口 / UUID / Reality 密钥，所以不会让已发出去的订阅失效。
+  签完从节点回读到期时间，据此判定成败，不看 acme.sh 的退出码
 
 ### 订阅
 - `GET /sub/{token}` — 订阅 (自动识别客户端格式)

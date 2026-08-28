@@ -55,12 +55,34 @@ export interface NodeDetail extends Node {
   inbounds: Inbound[]
 }
 
+// 节点上实际持有的证书，由后端从节点回读得到。vless-reality 借用真实站点的
+// 证书、自己没有证书，其 InboundStatus 不带 cert 字段。
+export interface CertStatus {
+  domain: string
+  path: string
+  not_after?: string
+  days_left: number
+  expired: boolean
+  error?: string
+}
+
 export interface InboundStatus {
   id: number
   protocol: string
   port: number
   network: string
   listening: boolean | null
+  cert?: CertStatus
+}
+
+export interface CertRenewResult {
+  domain: string
+  protocol: string
+  status: 'renewed' | 'fresh' | 'failed'
+  before?: CertStatus
+  after?: CertStatus
+  details?: string
+  acme_output?: string
 }
 
 export interface NodeStatus {
@@ -76,6 +98,8 @@ export interface NodeStatus {
   disk_total?: number
   disk_used?: number
   uptime?: number
+  // 该节点所有 TLS 入站里最差的一张证书还剩几天；无 TLS 入站时后端不返回该字段。
+  cert_days_left?: number
   checked_at?: number // 前端记录的本次检测时刻，非后端字段
 }
 
@@ -266,6 +290,11 @@ export const api = {
   deleteInbound: (id: number) => request<unknown>(`/api/inbounds/${id}`, send('DELETE')),
 
   nodeStatus: (id: number) => request<NodeStatus>(`/api/nodes/${id}/status`),
+  certRenew: (id: number, force = false) =>
+    request<{ node: string; renewed: number; certs: CertRenewResult[] }>(
+      `/api/nodes/${id}/cert-renew`,
+      send('POST', { force }),
+    ),
   setupSSH: (id: number, password: string) =>
     request<{ status: string }>(`/api/nodes/${id}/setup-ssh`, send('POST', { password })),
   install: (id: number) =>

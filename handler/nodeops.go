@@ -40,6 +40,8 @@ func (h *NodeOpsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.getStatus(w, r)
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/tune"):
 		h.tune(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/cert-renew"):
+		h.HandleCertRenew(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -122,6 +124,10 @@ func (h *NodeOpsHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// A listening socket is not a working inbound: hysteria2 keeps its UDP
+	// listener open with a long-expired certificate, and every client fails TLS
+	// while the node still looks healthy. Read the certs back too.
+	certStatuses := readCertStatuses(client, certTargetsFor(inbounds), time.Now())
 	inboundStatuses := make([]map[string]any, 0, len(inbounds))
 	for _, inbound := range inbounds {
 		network := "tcp"
@@ -132,10 +138,14 @@ func (h *NodeOpsHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 		if socketErr == nil {
 			listening = listeningSockets[network][inbound.Port]
 		}
-		inboundStatuses = append(inboundStatuses, map[string]any{
+		inboundStatus := map[string]any{
 			"id": inbound.ID, "protocol": inbound.Protocol, "port": inbound.Port, "network": network,
 			"listening": listening,
-		})
+		}
+		if cert, ok := certStatuses[inbound.ID]; ok {
+			inboundStatus["cert"] = cert
+		}
+		inboundStatuses = append(inboundStatuses, inboundStatus)
 	}
 
 	// System info: memory + disk
@@ -157,6 +167,9 @@ func (h *NodeOpsHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if socketErr != nil {
 		result["listener_check_error"] = "ss command unavailable or failed"
+	}
+	if days, ok := certDaysLeftHeadline(certStatuses); ok {
+		result["cert_days_left"] = days
 	}
 	if sysInfo != nil {
 		result["mem_total"] = sysInfo["mem_total"]

@@ -83,6 +83,8 @@ export const NODE_HEALTH_COLOR: Record<string, string> = {
   stopped: 'red',
   missing: 'orange',
   partial: 'orange',
+  certExpired: 'red',
+  certExpiring: 'orange',
   unknown: 'default',
 }
 

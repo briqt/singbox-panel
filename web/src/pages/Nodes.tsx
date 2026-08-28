@@ -14,7 +14,7 @@ import { useToast } from '../toast'
 import { EmptyState, Mono, PageHeader } from '../ui'
 import { NODE_HEALTH_COLOR } from '../theme'
 import { fmtBytes, fmtClock, fmtUptime } from '../format'
-import { healthLabel, healthState } from '../nodeHealth'
+import { CERT_WARN_DAYS, healthLabel, healthState } from '../nodeHealth'
 import { AutoSetupModal, CertUploadModal, ConfigModal, CreateNodeModal, SetupSSHModal } from '../components/NodeModals'
 
 const { Text } = Typography
@@ -176,6 +176,23 @@ export default function Nodes() {
     }
   }
 
+  const renewCert = async (node: Node) => {
+    try {
+      const result = await api.certRenew(node.id)
+      const failed = result.certs.filter((cert) => cert.status === 'failed')
+      if (failed.length) {
+        toast.err(new Error(t('certRenewFailed', { details: failed.map((cert) => cert.details ?? cert.domain).join('; ') })))
+      } else if (result.renewed) {
+        toast.ok(t('certRenewOk', { n: result.renewed }))
+      } else {
+        toast.ok(t('certRenewFresh'))
+      }
+      checkStatus(node)
+    } catch (error) {
+      toast.err(error)
+    }
+  }
+
   const push = async (node: Node) => {
     try {
       await api.push(node.id)
@@ -307,6 +324,7 @@ export default function Nodes() {
                   onInstall={() => install(node)}
                   onAutoSetup={() => setSetupNode(node)}
                   onCert={() => setCertNode(node)}
+                  onCertRenew={() => renewCert(node)}
                   onPush={() => push(node)}
                   onPreview={() => showConfig(node, 'preview')}
                   onRaw={() => showConfig(node, 'raw')}
@@ -347,6 +365,7 @@ function NodeBody({
   onInstall,
   onAutoSetup,
   onCert,
+  onCertRenew,
   onPush,
   onPreview,
   onRaw,
@@ -363,6 +382,7 @@ function NodeBody({
   onInstall: () => void
   onAutoSetup: () => void
   onCert: () => void
+  onCertRenew: () => void
   onPush: () => void
   onPreview: () => void
   onRaw: () => void
@@ -372,8 +392,9 @@ function NodeBody({
 }) {
   const { t } = useI18n()
   const inbounds = detail?.inbounds ?? []
-  const listeningOf = (inbound: Inbound) =>
-    (status?.inbounds ?? []).find((item) => item.id === inbound.id)?.listening ?? null
+  const statusOf = (inbound: Inbound) => (status?.inbounds ?? []).find((item) => item.id === inbound.id)
+  const listeningOf = (inbound: Inbound) => statusOf(inbound)?.listening ?? null
+  const certOf = (inbound: Inbound) => statusOf(inbound)?.cert
 
   return (
     <>
@@ -398,6 +419,14 @@ function NodeBody({
         <Button size="small" onClick={onCert}>
           {t('uploadCert')}
         </Button>
+        <Popconfirm
+          title={t('certRenewConfirm', { name: node.name })}
+          okText={t('confirm')}
+          cancelText={t('cancel')}
+          onConfirm={onCertRenew}
+        >
+          <Button size="small">{t('certRenew')}</Button>
+        </Popconfirm>
         <Popconfirm
           title={t('pushConfirm', { name: node.name })}
           okText={t('confirm')}
@@ -477,6 +506,28 @@ function NodeBody({
                 <Tag color={listening === true ? 'green' : listening === false ? 'red' : 'default'}>
                   {listening === true ? t('listening') : listening === false ? t('notListening') : t('unknown')}
                 </Tag>
+              )
+            },
+          },
+          {
+            title: t('cert'),
+            width: 120,
+            render: (_, inbound) => {
+              const cert = certOf(inbound)
+              // reality 没有自己的证书，后端不返回 cert，这里就该是「无」而不是告警。
+              if (!cert) return <Text type="secondary">{t('certNone')}</Text>
+              if (cert.error) {
+                return (
+                  <Tooltip title={cert.error}>
+                    <Tag color="red">{t('certUnreadable')}</Tag>
+                  </Tooltip>
+                )
+              }
+              const color = cert.expired ? 'red' : cert.days_left < CERT_WARN_DAYS ? 'orange' : 'green'
+              return (
+                <Tooltip title={`${cert.domain} · ${cert.not_after ?? ''}`}>
+                  <Tag color={color}>{cert.expired ? t('certExpired') : t('certDays', { days: cert.days_left })}</Tag>
+                </Tooltip>
               )
             },
           },

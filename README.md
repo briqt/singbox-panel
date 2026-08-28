@@ -15,7 +15,12 @@ Personal sing-box proxy node management panel. Full lifecycle: create node → S
 - **One-click node setup** — auto-selects protocols, generates keys, issues certs, pushes config
 - **User management** — UUID-based auth, traffic limits, expiry, per-node access control
 - **Multi-format subscriptions** — base64 (v2rayN/Shadowrocket), Clash Meta YAML (auto-detect via User-Agent)
-- **Certificate management** — ACME via acme.sh with auto-renewal cron
+- **Certificate management** — ACME via acme.sh with auto-renewal cron. Renewal
+  decisions are made on the certificate's **expiry**, read back from the node,
+  not on whether the files exist: an expired cert is a file like any other, and
+  keying off existence let a node serve a dead certificate while reporting
+  healthy. `POST /api/nodes/{id}/cert-renew` re-issues without touching ports,
+  UUIDs or Reality keys; node status reports days remaining per inbound.
 - **Node health overview** — automatically checks SSH reachability, service state, version, resources, and per-inbound listeners when the node page opens
 - **Admin Web UI** — React + Vite + antd SPA compiled into the binary, i18n (zh/en), light theme, full node lifecycle controls
 - **SSH-based operations** — key injection, sing-box install/upgrade, config push with validation
