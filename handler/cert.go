@@ -177,20 +177,33 @@ DOMAIN=%q; CERT=%q; KEY=%q; FORCE=%q; MINDAYS=%d
 ACME=/root/.acme.sh/acme.sh
 mkdir -p "$(dirname "$CERT")"
 
+# Repair the renewal *machinery* on every run, before deciding whether this
+# particular cert needs re-issuing. A node can hold a perfectly valid cert and
+# still have no cron to renew it — that is not a healthy node, it is an outage
+# with a date on it. Gating this behind "we happened to re-issue today" would
+# leave exactly those nodes unfixed.
+harden_acme() {
+  [ -x "$ACME" ] || return 0
+  # acme.sh writes no log unless LOG_FILE is set, and the cron entry it installs
+  # sends stdout to /dev/null, so a failing renewal is silent until expiry.
+  touch /root/.acme.sh/account.conf
+  grep -q '^LOG_FILE=' /root/.acme.sh/account.conf || echo "LOG_FILE='/root/.acme.sh/acme.sh.log'" >> /root/.acme.sh/account.conf
+  grep -q '^LOG_LEVEL=' /root/.acme.sh/account.conf || echo "LOG_LEVEL=1" >> /root/.acme.sh/account.conf
+  "$ACME" --install-cronjob >/dev/null 2>&1
+  echo "ACME_HARDENED"
+}
+harden_acme
+
 if [ "$FORCE" != "1" ] && [ -f "$CERT" ] && [ -f "$KEY" ] &&
    openssl x509 -in "$CERT" -noout -checkend $((MINDAYS * 86400)) >/dev/null 2>&1; then
   echo "CERT_FRESH"; exit 0
 fi
 
-if [ ! -x "$ACME" ]; then curl -sL https://get.acme.sh | sh -s email=acme@"$DOMAIN" 2>&1; fi
+if [ ! -x "$ACME" ]; then
+  curl -sL https://get.acme.sh | sh -s email=acme@"$DOMAIN" 2>&1
+  harden_acme
+fi
 if [ ! -x "$ACME" ]; then echo "ACME_MISSING"; exit 0; fi
-
-# Make future failures visible. acme.sh logs nothing unless LOG_FILE is set and
-# the cron entry it installs discards stdout, so a broken renewal is silent
-# right up until the cert expires.
-touch /root/.acme.sh/account.conf
-grep -q '^LOG_FILE=' /root/.acme.sh/account.conf || echo "LOG_FILE='/root/.acme.sh/acme.sh.log'" >> /root/.acme.sh/account.conf
-grep -q '^LOG_LEVEL=' /root/.acme.sh/account.conf || echo "LOG_LEVEL=1" >> /root/.acme.sh/account.conf
 
 "$ACME" --set-default-ca --server letsencrypt 2>/dev/null
 
@@ -219,7 +232,6 @@ fi
 
 "$ACME" --install-cert -d "$DOMAIN" --ecc --fullchain-file "$CERT" --key-file "$KEY" \
   --reloadcmd "systemctl restart sing-box 2>/dev/null || true" 2>&1
-"$ACME" --install-cronjob 2>/dev/null
 echo "ACME_DONE"
 `, domain, certPath, keyPath, forceFlag, minDays)
 }

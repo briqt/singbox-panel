@@ -154,6 +154,27 @@ func TestRenewScriptPinsCAOnIssue(t *testing.T) {
 	}
 }
 
+// TestRenewRepairsMachineryBeforeFreshnessGate guards the case that motivated
+// the ordering: a node holding a still-valid cert but with no renewal cron is
+// an outage with a date on it. If the cron/log setup sat after the gate, those
+// nodes would return "fresh" and stay unfixed — the exact shape of the bug this
+// change exists to remove, one step later in time.
+func TestRenewRepairsMachineryBeforeFreshnessGate(t *testing.T) {
+	script := renewCertScript("example.test", "/tmp/a.crt", "/tmp/a.key", false, 30)
+	harden := strings.Index(script, "harden_acme\n")
+	cron := strings.Index(script, "--install-cronjob")
+	gate := strings.Index(script, "CERT_FRESH")
+	if harden < 0 || cron < 0 || gate < 0 {
+		t.Fatalf("script missing expected parts (harden=%d cron=%d gate=%d)", harden, cron, gate)
+	}
+	if cron > gate {
+		t.Error("--install-cronjob must run before the freshness gate, or a valid-but-uncronned cert stays uncronned")
+	}
+	if harden > gate {
+		t.Error("harden_acme must be invoked before the freshness gate")
+	}
+}
+
 func TestParseCertNotAfter(t *testing.T) {
 	cases := []struct {
 		in   string
