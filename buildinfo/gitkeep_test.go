@@ -27,6 +27,37 @@ func TestGitkeepStaysTracked(t *testing.T) {
 	}
 }
 
+// The restore must happen inside the $(shell) that computes VERSION, not in a
+// recipe line. Make expands the whole recipe — including $(shell git describe
+// --dirty) — before running any of its commands, so a `touch` on the first
+// line is already too late. v0.5.0 and v0.5.1 both shipped stamped "-dirty"
+// with the restore sitting in the recipe, looking correct and doing nothing.
+func TestVersionRestoresGitkeepBeforeDescribing(t *testing.T) {
+	root, err := repoRoot()
+	if err != nil {
+		t.Skipf("not a git checkout: %v", err)
+	}
+	makefile, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Skip("Makefile unreadable")
+	}
+	for _, line := range strings.Split(string(makefile), "\n") {
+		if !strings.HasPrefix(line, "VERSION") || !strings.Contains(line, "git describe") {
+			continue
+		}
+		touched := strings.Index(line, "web/dist/.gitkeep")
+		described := strings.Index(line, "git describe")
+		if touched < 0 {
+			t.Fatal("VERSION does not restore web/dist/.gitkeep; git describe will see a deleted tracked file and stamp the build dirty")
+		}
+		if touched > described {
+			t.Fatal("VERSION restores .gitkeep after git describe; the restore must precede it in the same shell")
+		}
+		return
+	}
+	t.Fatal("no VERSION line invoking git describe found in Makefile")
+}
+
 // The restore has to live in build-stamped, the target CI actually invokes.
 // Putting it only in `web` hid the bug locally for exactly this reason.
 func TestBuildStampedRestoresGitkeep(t *testing.T) {

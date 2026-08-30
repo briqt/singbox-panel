@@ -8,7 +8,15 @@ web:
 
 # Stamped into the binary so `GET /api/version` can answer "which build is
 # live?" over HTTP, instead of someone ssh-ing to the host to run sha256sum.
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+#
+# The `git describe` runs inside a $(shell), which Make evaluates while
+# expanding the recipe — before any command in it executes. A recipe line that
+# restores web/dist/.gitkeep therefore cannot influence this value, however
+# early it is placed. `pnpm build` deletes that tracked file, so the restore has
+# to happen before Make expands VERSION at all: hence it is folded into the
+# $(shell) itself. v0.5.0 and v0.5.1 both shipped stamped "-dirty" because the
+# restore sat in the recipe and was, by construction, always too late.
+VERSION ?= $(shell touch web/dist/.gitkeep 2>/dev/null; git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 # Build date comes from the commit, not from `date`: a wall-clock stamp makes
 # every rebuild a different binary and destroys the reproducibility check.
