@@ -2,6 +2,7 @@ package singbox
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -99,4 +100,111 @@ func TestClashConfigIncludesPrivateAndChinaDirectRules(t *testing.T) {
 			t.Fatalf("missing rule %q", rule)
 		}
 	}
+}
+
+const hy2WithObfs = `{"domain":"node.example.com","cert_path":"/cert","key_path":"/key","obfs_password":"a1b2c3d4e5f60718"}`
+
+func hysteria2Inbound(t *testing.T, settings string) map[string]any {
+	t.Helper()
+	configBytes, err := GenerateConfig([]model.User{{Name: "test", UUID: "uuid"}}, []model.NodeInbound{{
+		Tag: "hy2", Protocol: "hysteria2", Port: 443, Enabled: true,
+		Settings: json.RawMessage(settings),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Inbounds []map[string]any `json:"inbounds"`
+	}
+	if err := json.Unmarshal(configBytes, &config); err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Inbounds) != 1 {
+		t.Fatalf("inbounds=%#v", config.Inbounds)
+	}
+	return config.Inbounds[0]
+}
+
+func TestHysteria2EnablesSalamanderObfsWhenAPasswordIsStored(t *testing.T) {
+	obfs, ok := hysteria2Inbound(t, hy2WithObfs)["obfs"].(map[string]any)
+	if !ok {
+		t.Fatal("obfs block missing from the Hysteria2 inbound")
+	}
+	if obfs["type"] != "salamander" {
+		t.Fatalf("obfs type=%v want salamander", obfs["type"])
+	}
+	if obfs["password"] != "a1b2c3d4e5f60718" {
+		t.Fatalf("obfs password=%v", obfs["password"])
+	}
+}
+
+// Nodes that predate the obfs rollout have no stored password. They must keep
+// generating a valid config rather than an inbound with an empty obfuscator,
+// which would refuse every client until the node is re-provisioned.
+func TestHysteria2OmitsObfsWhenNoPasswordIsStored(t *testing.T) {
+	inbound := hysteria2Inbound(t, `{"domain":"node.example.com","cert_path":"/cert","key_path":"/key"}`)
+	if _, exists := inbound["obfs"]; exists {
+		t.Fatal("obfs must be omitted when no password has been provisioned")
+	}
+}
+
+func TestHysteria2CommandsClientsOntoBBR(t *testing.T) {
+	if got := hysteria2Inbound(t, hy2WithObfs)["ignore_client_bandwidth"]; got != true {
+		t.Fatalf("ignore_client_bandwidth=%v; without it clients use Brutal, which answers QoS loss by sending harder", got)
+	}
+}
+
+// The failure this guards against is silent and looks exactly like a dead
+// server: a client whose obfuscator password disagrees with the server's gets
+// a connection timeout, with nothing in either log saying why. Server config
+// and subscription are generated from the same stored settings, so assert they
+// actually agree rather than assuming it.
+func TestHysteria2ObfsPasswordReachesEveryClientFormat(t *testing.T) {
+	inbound := model.NodeInbound{
+		Tag: "hy2", Protocol: "hysteria2", Port: 443, Enabled: true,
+		Settings: json.RawMessage(hy2WithObfs),
+	}
+	user := model.User{Name: "test", UUID: "uuid-1"}
+	nodes := []model.NodeWithInbounds{{
+		Node:     model.Node{Name: "tokyo", Host: "203.0.113.1", Domain: "node.example.com", Enabled: true},
+		Inbounds: []model.NodeInbound{inbound},
+	}}
+
+	serverObfs, _ := hysteria2Inbound(t, hy2WithObfs)["obfs"].(map[string]any)["password"].(string)
+
+	// Compare exact values, never substrings: "obfs-password=<pw>" is a prefix
+	// of "obfs-password=<pw>x", so a Contains check silently accepts a
+	// corrupted password — which is precisely the bug this test exists to catch.
+	sub := strings.TrimSpace(GenerateSubscription(user, nodes))
+	uri, err := url.Parse(sub)
+	if err != nil {
+		t.Fatalf("subscription is not a parseable URI: %v (%s)", err, sub)
+	}
+	query := uri.Query()
+	if query.Get("obfs") != "salamander" {
+		t.Fatalf("subscription URI obfs=%q want salamander", query.Get("obfs"))
+	}
+	if query.Get("obfs-password") != serverObfs {
+		t.Fatalf("subscription URI password %q disagrees with the server's %q", query.Get("obfs-password"), serverObfs)
+	}
+
+	clash := GenerateClashConfig(user, nodes)
+	if !hasYAMLLine(clash, "obfs", "salamander") {
+		t.Fatalf("clash profile does not select the obfuscator: %s", clash)
+	}
+	if !hasYAMLLine(clash, "obfs-password", serverObfs) {
+		t.Fatalf("clash profile password disagrees with the server's %q: %s", serverObfs, clash)
+	}
+}
+
+// hasYAMLLine matches a whole "key: value" line so a longer value cannot pass
+// as the expected one.
+func hasYAMLLine(doc, key, value string) bool {
+	for _, line := range strings.Split(doc, "\n") {
+		k, v, found := strings.Cut(strings.TrimSpace(line), ": ")
+		if found && k == key && v == value {
+			return true
+		}
+	}
+	return false
 }

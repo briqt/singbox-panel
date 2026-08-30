@@ -74,6 +74,9 @@ CI（`.github/workflows`）跑 `make test` 后交叉编译 linux 的 amd64 与 a
 - **凭据/CA 这类"记在别处"的状态，改默认值不会改已有记录。** `acme.sh --set-default-ca` 只影响新域名；已有域名记着自己的 `Le_API`，在别的 CA 上建的记录会一直回那个 CA 续期，若其账户凭据从未存过（ZeroSSL 要 EAB）就永久失败。因此 `--issue` 必须显式带 `--server`，`TestRenewScriptPinsCAOnIssue` 守这条。
 - **静默的定时任务等于没有。** acme.sh 不设 `LOG_FILE` 就不写日志，`--install-cronjob` 装的 cron 又把 stdout 丢进 `/dev/null`，续期失败五周无人知晓直到证书过期。装计划任务时一并把日志落地。
 - **新增的检查/门禁，当轮做证伪测试。** 故意把它该抓的东西弄坏，确认真的报警。绿灯只证明被测的量在范围内，不证明要防的事没发生。`TestHostKeyRejectsMismatch` 是范例。
+- **证伪要证伪到"值"，`strings.Contains` 会放水。** `obfs-password=<pw>` 是 `obfs-password=<pw>x` 的前缀，所以把客户端密码改错、用 `Contains` 断言的测试照样绿。第一版 `TestHysteria2ObfsPasswordReachesEveryClientFormat` 就是这么骗过证伪的。断言配置项一律解析出**值**再比（URI 走 `url.Parse` 取 query，YAML 走整行匹配），别拿子串糊弄。
+- **测得快不等于伪装得像。** `selectRealitySNI` 原本只按 `time_appconnect` 排序挑最快的候选，于是 CDN 边缘必胜——三个直连节点全选中 `updates.cdn-apple.com`，而它答 HTTP/1.1 加 403，跟它冒充的站行为对不上。REALITY 会把探测流量回落到这个目标，所以判据得落在**行为可信度**（h2 + 非错误状态码）上，延迟只配在合格者之间做排序。
+- **"已存在就跳过"会把配置永久冻在第一次的取值上。** `auto-setup` 曾对已有的 Reality 入站无条件 `skipped`，结果任何后续改进都够不着最需要它的那批节点。幂等应当是"重新求值，结果相同才跳过"，不是"存在就不看"。重配时要区分**可换的**（端口、握手目标）与**换了就废掉已发订阅的**（密钥对、short_id、UUID），后者必须原样保留。
 - **阈值只调到仍能捕捉回归的位置，不调到消音。** 见 `web/vite.config.ts` 的 `chunkSizeWarningLimit`。
 - **前端分包是否生效，看 `dist/index.html` 的 `script` 与 `modulepreload` 列表，不看 chunk 体积表。** 手动命名一个 chunk 会把它拉进入口的预加载列表，体积表上"拆开了"、浏览器首屏照样下载。同理 `manualChunks` 必须按 `node_modules/` 之后的完整包名段匹配——`recharts` 的路径里含 `react`，子串匹配会把图表库塞进首屏。
 

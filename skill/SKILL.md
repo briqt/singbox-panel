@@ -18,7 +18,7 @@ description: 管理 singbox-panel 代理面板——用户管理（创建/启用
 
 | 协议 | 用途 | 需要域名 | 特点 |
 |------|------|---------|------|
-| hysteria2 | 日常高速 | 是 | UDP/QUIC, 最快 |
+| hysteria2 | 日常高速 | 是 | UDP/QUIC, Salamander 混淆 + BBR, 最快 |
 | vless-reality | 稳定抗封 | 否 | TCP, 伪装正规网站, 零依赖 |
 | vless-httpupgrade | CDN 中转 | 是 | 用于被墙IP/IPv6-only节点 |
 
@@ -134,7 +134,11 @@ POST /api/users/{id}/reset-traffic
 - `POST /api/nodes/{id}/setup-ssh` — 注入公钥 ({password})
 - `POST /api/nodes/{id}/install` — 安装/升级 sing-box ({version})
 - `GET /api/nodes/{id}/setup-assessment?mode=auto&domain=X` — 检测 DNS 并解释部署模式建议；不会仅凭 DNS 不一致认定为 CDN
-- `POST /api/nodes/{id}/auto-setup` — 幂等配置和域名迁移 ({domain, mode, protocols, ports})；mode 支持 auto/direct/cdn/reality
+- `POST /api/nodes/{id}/auto-setup` — 幂等配置和域名迁移 ({domain, mode, protocols, ports})；mode 支持 auto/direct/cdn/reality。
+  幂等的含义是**重新求值、结果相同才跳过**：重跑会重新校验 Reality 握手目标（要求 h2 + 非错误状态码，
+  不合格才换）并把端口收敛到常规 HTTPS 端口（443 → 8443/2053/2083/2087/2096，跳过节点上已占用的）。
+  密钥对、short_id、用户 UUID 一律保留，所以重跑不会让已发出去的订阅失效——但**端口或握手目标一变，
+  客户端必须重新拉一次订阅**。
 
 ### 配置
 - `POST /api/nodes/{id}/generate` — 预览配置

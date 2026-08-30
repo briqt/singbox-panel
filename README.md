@@ -6,7 +6,7 @@ Personal sing-box proxy node management panel. Full lifecycle: create node → S
 
 | Protocol | Use Case | Requires Domain | Notes |
 |----------|----------|----------------|-------|
-| Hysteria2 | High speed | Yes | UDP/QUIC, adaptive congestion control |
+| Hysteria2 | High speed | Yes | UDP/QUIC, Salamander obfuscation, BBR congestion control |
 | VLESS Reality | Domainless fallback | No | TCP, handshake target is probed from the node |
 | VLESS HTTPUpgrade | CDN relay | Yes | For blocked IPs / IPv6-only nodes |
 
@@ -124,9 +124,22 @@ Auto-setup logic:
 - `reality` — VLESS Reality only; no domain required
 - Manual override via `protocols` field
 
-Reality handshake targets are tested from the node and the fastest TLS 1.3
-candidate is selected. Existing Reality credentials and handshake settings are
-preserved during repeat setup.
+Reality handshake targets are tested from the node. A candidate qualifies only
+if it answers over **HTTP/2 with a non-error status**; latency merely orders the
+candidates that already pass. Ranking on latency alone selects CDN edges, and a
+CDN edge is the wrong answer: REALITY forwards a failed probe to this target, so
+a prober would see a big-site certificate on a server that speaks no h2 and
+refuses the root path — an inconsistency the real site never shows.
+
+Repeat setup **re-evaluates** the stored handshake target and listen port rather
+than skipping an inbound because it exists, so later improvements reach nodes
+that were provisioned earlier. Reality credentials (keypair, short ID) and user
+UUIDs are preserved, so re-running setup never invalidates issued subscriptions.
+
+Listen ports are chosen from conventional HTTPS ports (443, then 8443/2053/2083/
+2087/2096), skipping whatever the node already has bound — a panel host running
+Caddy on 443 keeps it. A random high port is an anomaly no protocol can paper
+over: no Apple or Microsoft edge serves TLS on port 31795.
 
 ## API
 
