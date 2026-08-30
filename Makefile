@@ -23,8 +23,14 @@ build: web
 
 # Same stamp, caller-chosen output and target platform. CI uses this so a
 # release artifact reports the same version a local `make build` would.
+#
+# Restores web/dist/.gitkeep first: `pnpm build` wipes web/dist, and that file
+# is tracked, so a bare `pnpm build` leaves the tree dirty and every release
+# binary stamps itself "-dirty". `make web` hid this locally by touching the
+# file itself; CI called pnpm directly and did not.
 OUT ?= bin/singbox-panel
 build-stamped:
+	@touch web/dist/.gitkeep
 	go build -trimpath -ldflags="$(LDFLAGS)" -o $(OUT) .
 
 test:
