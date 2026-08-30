@@ -3,6 +3,7 @@ package singbox
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/briqt/singbox-panel/model"
@@ -117,15 +118,34 @@ func buildHysteria2Inbound(users []model.User, ib model.NodeInbound, s map[strin
 	domain, _ := s["domain"].(string)
 	certPath, _ := s["cert_path"].(string)
 	keyPath, _ := s["key_path"].(string)
-	return map[string]any{
+	inbound := map[string]any{
 		"type": "hysteria2", "tag": tag,
 		"listen": "::", "listen_port": ib.Port,
 		"users": hy2Users,
+		// Without bandwidth limits this tells clients to use BBR instead of
+		// Hysteria's Brutal CC. Brutal sends at the client's declared rate and
+		// treats loss as noise, which is the wrong reflex on a link that is
+		// being shaped rather than congested: carrier UDP QoS shows up as loss,
+		// Brutal answers by sending harder, and the result is the stall-recover
+		// cycle. BBR backs off and the tunnel stays usable. The cost is peak
+		// throughput on a clean link — drop this key to get Brutal back.
+		"ignore_client_bandwidth": true,
 		"tls": map[string]any{
 			"enabled": true, "server_name": domain, "alpn": []string{"h3"},
 			"certificate_path": certPath, "key_path": keyPath,
 		},
 	}
+	// Salamander wraps QUIC into what looks like random UDP. A bare QUIC
+	// handshake on a fixed port is the pattern carrier UDP QoS matches on.
+	// Enabling it means the port is no longer a valid HTTP/3 endpoint, which is
+	// why there is no masquerade fallback to pair with it.
+	if obfsPassword, _ := s["obfs_password"].(string); obfsPassword != "" {
+		inbound["obfs"] = map[string]any{
+			"type":     "salamander",
+			"password": obfsPassword,
+		}
+	}
+	return inbound
 }
 
 func buildRealityInbound(users []model.User, ib model.NodeInbound, s map[string]any, tag string) map[string]any {
@@ -254,8 +274,12 @@ func buildHysteria2URI(user model.User, node model.Node, ib model.NodeInbound, s
 		return ""
 	}
 	name := names.next(node.Name + "-Hy2")
-	return fmt.Sprintf("hysteria2://%s@%s:%d?sni=%s&alpn=h3#%s",
-		user.UUID, hostForURI(node.Host), ib.Port, domain, name)
+	obfs := ""
+	if obfsPassword, _ := s["obfs_password"].(string); obfsPassword != "" {
+		obfs = "&obfs=salamander&obfs-password=" + url.QueryEscape(obfsPassword)
+	}
+	return fmt.Sprintf("hysteria2://%s@%s:%d?sni=%s&alpn=h3%s#%s",
+		user.UUID, hostForURI(node.Host), ib.Port, domain, obfs, name)
 }
 
 func buildRealityURI(user model.User, node model.Node, ib model.NodeInbound, s map[string]any, names protocolNameTracker) string {

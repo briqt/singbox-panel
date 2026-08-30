@@ -182,6 +182,8 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 		return errors.Join(rollbackErrors...)
 	}
 
+	// Ports handed out during this run, per L4 network. See selectListenPort.
+	reservedPorts := map[string]map[int]bool{"tcp": {}, "udp": {}}
 	hadError := false
 	for _, proto := range req.Protocols {
 		existing, exists := existingProtos[proto]
@@ -192,11 +194,27 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 				hadError = true
 				continue
 			}
+			runner := func(command string) (string, error) { return sshRun(client, command) }
 			var oldSettings map[string]any
+			currentPort := 0
 			if exists {
 				json.Unmarshal(existing.Settings, &oldSettings)
+				currentPort = existing.Port
+			}
+			// The obfuscator password is a credential clients must carry, so it
+			// is generated once and preserved across runs like the Reality keys.
+			obfsPassword, _ := oldSettings["obfs_password"].(string)
+			if obfsPassword == "" {
+				obfsPassword = randomHex(16)
+			}
+			desiredPort := req.Ports.Hysteria2
+			if desiredPort == 0 {
+				desiredPort = selectListenPort(runner, "udp", currentPort, reservedPorts["udp"])
+			}
+			if exists {
 				oldDomain, _ := oldSettings["domain"].(string)
-				if oldDomain == domain && (req.Ports.Hysteria2 == 0 || req.Ports.Hysteria2 == existing.Port) {
+				_, hadObfs := oldSettings["obfs_password"].(string)
+				if oldDomain == domain && desiredPort == existing.Port && hadObfs {
 					results = append(results, inboundResult{Protocol: proto, Port: existing.Port, Status: "skipped", Details: "already configured"})
 					continue
 				}
@@ -218,14 +236,7 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 				hadError = true
 				continue
 			}
-			port := req.Ports.Hysteria2
-			if port == 0 {
-				if exists {
-					port = existing.Port
-				} else {
-					port = randomPort()
-				}
-			}
+			port := desiredPort
 			certPath := fmt.Sprintf("/etc/sing-box/tls/%s.crt", domain)
 			keyPath := fmt.Sprintf("/etc/sing-box/tls/%s.key", domain)
 			// Shares renewCertScript with the renew endpoint so there is one
@@ -251,7 +262,10 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 				hadError = true
 				continue
 			}
-			settings := mustMarshal(map[string]any{"domain": domain, "cert_path": certPath, "key_path": keyPath})
+			settings := mustMarshal(map[string]any{
+				"domain": domain, "cert_path": certPath, "key_path": keyPath,
+				"obfs_password": obfsPassword,
+			})
 			inboundReq := model.CreateInboundReq{Tag: "hysteria2", Protocol: "hysteria2", Port: port, Settings: settings}
 			status := "ok"
 			if exists {
@@ -274,37 +288,64 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 			results = append(results, inboundResult{Protocol: proto, Port: port, Status: status})
 
 		case "vless-reality":
+			runner := func(command string) (string, error) { return sshRun(client, command) }
+			// An existing Reality inbound used to be skipped outright, which
+			// froze whatever handshake target and port it was first given. That
+			// made every later improvement unreachable on exactly the nodes that
+			// needed it. Re-evaluate both here, but keep the credentials: the
+			// keypair and short ID are what issued subscriptions authenticate
+			// with, so rotating them would break every client.
+			var oldSettings map[string]any
+			currentPort := 0
 			if exists {
-				results = append(results, inboundResult{Protocol: proto, Port: existing.Port, Status: "skipped", Details: "already configured"})
-				continue
+				json.Unmarshal(existing.Settings, &oldSettings)
+				currentPort = existing.Port
 			}
+			privateKey, _ := oldSettings["private_key"].(string)
+			publicKey, _ := oldSettings["public_key"].(string)
+			shortID, _ := oldSettings["short_id"].(string)
+			storedSNI, _ := oldSettings["sni"].(string)
+
 			port := req.Ports.Reality
 			if port == 0 {
-				port = randomPort()
+				port = selectListenPort(runner, "tcp", currentPort, reservedPorts["tcp"])
 			}
-			keypairOut, err := sshRun(client, node.SingboxBin+" generate reality-keypair")
-			if err != nil {
-				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: "keypair generation failed"})
-				hadError = true
-				continue
-			}
-			privateKey, publicKey := parseKeypair(keypairOut)
 			if privateKey == "" || publicKey == "" {
-				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: "keypair output was invalid"})
-				hadError = true
-				continue
+				keypairOut, err := sshRun(client, node.SingboxBin+" generate reality-keypair")
+				if err != nil {
+					results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: "keypair generation failed"})
+					hadError = true
+					continue
+				}
+				privateKey, publicKey = parseKeypair(keypairOut)
+				if privateKey == "" || publicKey == "" {
+					results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: "keypair output was invalid"})
+					hadError = true
+					continue
+				}
 			}
-			shortIDOut, _ := sshRun(client, node.SingboxBin+" generate rand 8 --hex")
-			shortID := trimOutput(shortIDOut)
 			if shortID == "" {
-				shortID = randomHex(8)
+				shortIDOut, _ := sshRun(client, node.SingboxBin+" generate rand 8 --hex")
+				shortID = trimOutput(shortIDOut)
+				if shortID == "" {
+					shortID = randomHex(8)
+				}
 			}
-			sni, probeErr := selectRealitySNI(func(command string) (string, error) {
-				return sshRun(client, command)
-			})
-			if probeErr != nil {
-				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: probeErr.Error()})
-				hadError = true
+			// Re-probe only when the stored target no longer behaves like the
+			// site it impersonates. Rotating a healthy SNI on every run would
+			// invalidate live subscriptions for no gain.
+			sni := storedSNI
+			if sni == "" || !realityDestStillQualifies(runner, sni) {
+				probed, probeErr := selectRealitySNI(runner)
+				if probeErr != nil {
+					results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: probeErr.Error()})
+					hadError = true
+					continue
+				}
+				sni = probed
+			}
+			if exists && port == currentPort && sni == storedSNI {
+				results = append(results, inboundResult{Protocol: proto, Port: existing.Port, Status: "skipped", Details: "already configured"})
 				continue
 			}
 			settings := mustMarshal(map[string]any{
@@ -312,14 +353,26 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 				"short_id": shortID, "handshake_server": sni, "handshake_port": 443,
 				"fingerprint": "chrome",
 			})
-			inbound, err := h.Nodes.CreateInbound(node.ID, model.CreateInboundReq{Tag: "vless-reality", Protocol: "vless-reality", Port: port, Settings: settings})
-			if err != nil {
-				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: err.Error()})
-				hadError = true
-				continue
+			inboundReq := model.CreateInboundReq{Tag: "vless-reality", Protocol: "vless-reality", Port: port, Settings: settings}
+			status := "ok"
+			if exists {
+				updatedInbounds = append(updatedInbounds, existing)
+				if _, err := h.Nodes.UpdateInbound(existing.ID, inboundReq); err != nil {
+					results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: err.Error()})
+					hadError = true
+					continue
+				}
+				status = "updated"
+			} else {
+				inbound, err := h.Nodes.CreateInbound(node.ID, inboundReq)
+				if err != nil {
+					results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: err.Error()})
+					hadError = true
+					continue
+				}
+				createdInboundIDs = append(createdInboundIDs, inbound.ID)
 			}
-			createdInboundIDs = append(createdInboundIDs, inbound.ID)
-			results = append(results, inboundResult{Protocol: proto, Port: port, Status: "ok", Details: map[string]string{
+			results = append(results, inboundResult{Protocol: proto, Port: port, Status: status, Details: map[string]string{
 				"public_key": publicKey, "short_id": shortID, "sni": sni,
 			}})
 
@@ -346,6 +399,7 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 					port = 443
 				}
 			}
+			reservedPorts["tcp"][port] = true
 			path := ""
 			if exists {
 				path, _ = oldSettings["path"].(string)
@@ -458,6 +512,97 @@ func randomPort() int {
 	return int(n.Int64()) + 20000
 }
 
+// conventionalPorts are the ports a real HTTPS service plausibly listens on,
+// in preference order.
+//
+// A random 20000-49999 port is an anomaly the protocol cannot paper over:
+// REALITY borrows a big site's certificate, but no Apple or Microsoft edge
+// serves TLS on 31795, and Hysteria2's QUIC on a fixed high UDP port is what
+// carrier UDP QoS looks for. 443 first, then the alternates Cloudflare also
+// terminates HTTPS on, so a scan sees a boring port either way.
+var conventionalPorts = []int{443, 8443, 2053, 2083, 2087, 2096}
+
+// selectListenPort returns the most conventional free port for network ("tcp"
+// or "udp") on the node. currentPort is the port this inbound already owns; it
+// counts as free so that re-running setup on an already-correct node is a
+// no-op instead of walking down the preference list every time.
+//
+// reserved carries the ports already handed out earlier in this same setup run
+// and is updated with the result. The node probe cannot supply this: it reports
+// what is *listening*, and nothing this run assigned is listening yet — the
+// config is not pushed until every protocol has been processed. Without it, a
+// fresh CDN node would give 443 to HTTPUpgrade and then hand the same 443 to
+// Reality, and sing-box would refuse to start.
+func selectListenPort(run commandRunner, network string, currentPort int, reserved map[int]bool) int {
+	port := pickListenPort(run, network, currentPort, reserved)
+	if reserved != nil {
+		reserved[port] = true
+	}
+	return port
+}
+
+func pickListenPort(run commandRunner, network string, currentPort int, reserved map[int]bool) int {
+	occupied, err := listeningPorts(run, network)
+	if err != nil {
+		// Never fail setup over a probe: fall back to what the node already
+		// uses, or to the old random behaviour for a fresh inbound.
+		if currentPort != 0 && !reserved[currentPort] {
+			return currentPort
+		}
+		return randomPort()
+	}
+	delete(occupied, currentPort)
+	for _, port := range conventionalPorts {
+		if !occupied[port] && !reserved[port] {
+			return port
+		}
+	}
+	if currentPort != 0 && !reserved[currentPort] {
+		return currentPort
+	}
+	return randomPort()
+}
+
+// listeningPorts reads the node's listening sockets for one L4 network. TCP and
+// UDP are asked separately: Reality is TCP and Hysteria2 is UDP, so the same
+// port number can legitimately be free for one and taken by the other.
+func listeningPorts(run commandRunner, network string) (map[int]bool, error) {
+	flag := "-lnt"
+	if network == "udp" {
+		flag = "-lnu"
+	}
+	out, err := run("ss " + flag + " 2>/dev/null || netstat -ln" + strings.TrimPrefix(flag, "-ln"))
+	if err != nil && strings.TrimSpace(out) == "" {
+		return nil, fmt.Errorf("unable to read listening ports on node")
+	}
+	ports := parseListeningPorts(out)
+	if len(ports) == 0 {
+		// A node always has at least sshd listening. An empty parse means the
+		// output shape was not what we expected, and treating "parsed nothing"
+		// as "everything is free" would hand out a port already in use.
+		return nil, fmt.Errorf("listening-port probe returned no usable rows")
+	}
+	return ports, nil
+}
+
+func parseListeningPorts(output string) map[int]bool {
+	ports := map[int]bool{}
+	for _, line := range strings.Split(output, "\n") {
+		for _, field := range strings.Fields(line) {
+			idx := strings.LastIndex(field, ":")
+			if idx < 0 {
+				continue
+			}
+			port, err := strconv.Atoi(field[idx+1:])
+			if err != nil || port <= 0 || port > 65535 {
+				continue
+			}
+			ports[port] = true
+		}
+	}
+	return ports
+}
+
 func randomHex(bytes int) string {
 	b := make([]byte, bytes)
 	rand.Read(b)
@@ -467,20 +612,65 @@ func randomHex(bytes int) string {
 type commandRunner func(command string) (string, error)
 
 func selectRealitySNI(run commandRunner) (string, error) {
-	var script strings.Builder
-	for _, host := range realitySNIs {
-		fmt.Fprintf(&script, "(metric=$(curl -sS -o /dev/null --connect-timeout 3 --max-time 5 --tlsv1.3 --tls-max 1.3 -w '%%{time_appconnect}' 'https://%s/' 2>/dev/null) && printf '%s %%s\\n' \"$metric\") &\n", host, host)
-	}
-	script.WriteString("wait\n")
-	out, err := run(script.String())
+	out, err := run(realityProbeScript())
 	if err != nil && strings.TrimSpace(out) == "" {
 		return "", fmt.Errorf("unable to probe Reality handshake targets")
 	}
 	host, _ := parseFastestRealityProbe(out)
 	if host == "" {
-		return "", fmt.Errorf("no Reality handshake target completed a TLS 1.3 probe")
+		return "", fmt.Errorf("no Reality handshake target served HTTP/2 over TLS 1.3 with a non-error status")
 	}
 	return host, nil
+}
+
+// realityProbeScript measures every candidate from the node itself. It reports
+// three things per host, not one: a handshake target has to *behave* like the
+// site it impersonates, and latency alone cannot tell us that.
+func realityProbeScript() string {
+	return realityProbeScriptFor(realitySNIs...)
+}
+
+func realityProbeScriptFor(hosts ...string) string {
+	var script strings.Builder
+	for _, host := range hosts {
+		fmt.Fprintf(&script,
+			"(metric=$(curl -sS -o /dev/null --connect-timeout 3 --max-time 5 --tlsv1.3 --tls-max 1.3 -w '%%{http_version} %%{http_code} %%{time_appconnect}' 'https://%s/' 2>/dev/null) && printf '%s %%s\\n' \"$metric\") &\n",
+			host, host)
+	}
+	script.WriteString("wait\n")
+	return script.String()
+}
+
+// realityDestQualifies decides whether a probed candidate may serve as a
+// handshake target.
+//
+// Ranking on latency alone picks CDN edges, and a CDN edge is exactly the wrong
+// answer: updates.cdn-apple.com won on all three direct nodes while answering
+// HTTP/1.1 with a 403. REALITY forwards a failed probe to this target, so a
+// prober sees a "big-site" TLS certificate attached to a server that speaks no
+// h2 and refuses the root path — an inconsistency the real site never shows.
+// The property that matters is behavioural plausibility; latency only breaks
+// ties among candidates that already have it.
+// realityDestStillQualifies re-runs the same judgement against one already
+// chosen target. A dest that was fine when the node was provisioned can stop
+// being fine — sites drop h2, start redirecting, or begin refusing the node's
+// region — and the node would keep impersonating it regardless.
+func realityDestStillQualifies(run commandRunner, host string) bool {
+	out, err := run(realityProbeScriptFor(host))
+	if err != nil && strings.TrimSpace(out) == "" {
+		// Probe failure is not evidence the target is bad; leave it alone
+		// rather than churning a working node's SNI on a transient SSH error.
+		return true
+	}
+	probed, _ := parseRealityProbe(out, map[string]bool{host: true})
+	return probed == host
+}
+
+func realityDestQualifies(httpVersion string, statusCode int) bool {
+	if httpVersion != "2" && httpVersion != "3" {
+		return false
+	}
+	return statusCode >= 200 && statusCode < 400
 }
 
 func parseFastestRealityProbe(output string) (string, float64) {
@@ -488,14 +678,28 @@ func parseFastestRealityProbe(output string) (string, float64) {
 	for _, host := range realitySNIs {
 		allowed[host] = true
 	}
+	return parseRealityProbe(output, allowed)
+}
+
+// parseRealityProbe keeps an allow-list so a probe line can only ever name a
+// host we asked about; the output is shell-produced text and must not be able
+// to nominate an arbitrary handshake target.
+func parseRealityProbe(output string, allowed map[string]bool) (string, float64) {
 	bestHost := ""
 	bestLatency := 0.0
 	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) != 2 || !allowed[fields[0]] {
+		if len(fields) != 4 || !allowed[fields[0]] {
 			continue
 		}
-		latency, err := strconv.ParseFloat(fields[1], 64)
+		statusCode, err := strconv.Atoi(fields[2])
+		if err != nil {
+			continue
+		}
+		if !realityDestQualifies(fields[1], statusCode) {
+			continue
+		}
+		latency, err := strconv.ParseFloat(fields[3], 64)
 		if err != nil || latency <= 0 {
 			continue
 		}

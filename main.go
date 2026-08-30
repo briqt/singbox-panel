@@ -11,6 +11,7 @@ import (
 	"time"
 	_ "time/tzdata" // panel time zone must resolve on hosts without a tz database
 
+	"github.com/briqt/singbox-panel/buildinfo"
 	"github.com/briqt/singbox-panel/config"
 	"github.com/briqt/singbox-panel/db"
 	"github.com/briqt/singbox-panel/handler"
@@ -50,6 +51,7 @@ func main() {
 	nodeHandler := &handler.NodeHandler{Store: nodeStore, Access: accessStore, Sync: configHandler}
 	nodeOpsHandler := &handler.NodeOpsHandler{Nodes: nodeStore, Config: configHandler}
 	setupHandler := &handler.SetupHandler{Nodes: nodeStore, Config: configHandler, Ops: nodeOpsHandler}
+	reprovisionHandler := &handler.ReprovisionHandler{Nodes: nodeStore, Setup: setupHandler}
 	validateHandler := &handler.ValidateHandler{Config: configHandler}
 	statsHandler := &handler.StatsHandler{Users: userStore, Nodes: nodeStore, Traffic: trafficStore}
 
@@ -69,6 +71,14 @@ func main() {
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	// Which build is live. Unauthenticated on purpose: it answers the same
+	// question a deploy script would otherwise ssh in and run sha256sum for,
+	// and it reveals nothing an attacker cannot read off the public repo.
+	mux.HandleFunc("/api/version", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(buildinfo.Get())
 	})
 
 	// Readiness: the panel can actually serve. An unreachable database is a 503
@@ -133,6 +143,7 @@ func main() {
 
 	// Admin: batch, stats
 	mux.HandleFunc("/api/batch/push-all", admin(batchHandler.PushAll))
+	mux.HandleFunc("/api/batch/reprovision", admin(reprovisionHandler.HandleReprovision))
 	mux.HandleFunc("/api/batch/template", admin(batchHandler.ApplyTemplate))
 	mux.HandleFunc("/api/stats/meta", admin(statsHandler.HandleMeta))
 	mux.HandleFunc("/api/stats/usage", admin(statsHandler.HandleUsage))

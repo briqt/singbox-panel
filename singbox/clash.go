@@ -99,14 +99,18 @@ func clashHysteria2(user model.User, node model.Node, ib model.NodeInbound, s ma
 	if domain == "" {
 		return ""
 	}
+	obfs := ""
+	if obfsPassword, _ := s["obfs_password"].(string); obfsPassword != "" {
+		obfs = fmt.Sprintf("\n    obfs: salamander\n    obfs-password: %s", obfsPassword)
+	}
 	return fmt.Sprintf(`  - name: "%s"
     type: hysteria2
     server: %s
     port: %d
     password: %s
-    sni: %s
+    sni: %s%s
     alpn:
-      - h3`, name, node.Host, ib.Port, user.UUID, domain)
+      - h3`, name, node.Host, ib.Port, user.UUID, domain, obfs)
 }
 
 func clashReality(user model.User, node model.Node, ib model.NodeInbound, s map[string]any, name string) string {

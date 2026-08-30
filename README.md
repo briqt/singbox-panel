@@ -6,7 +6,7 @@ Personal sing-box proxy node management panel. Full lifecycle: create node → S
 
 | Protocol | Use Case | Requires Domain | Notes |
 |----------|----------|----------------|-------|
-| Hysteria2 | High speed | Yes | UDP/QUIC, adaptive congestion control |
+| Hysteria2 | High speed | Yes | UDP/QUIC, Salamander obfuscation, BBR congestion control |
 | VLESS Reality | Domainless fallback | No | TCP, handshake target is probed from the node |
 | VLESS HTTPUpgrade | CDN relay | Yes | For blocked IPs / IPv6-only nodes |
 
@@ -57,7 +57,10 @@ panel.example.com {
 
 Probes: `GET /api/health` reports only that the process is up (a dependency blip
 must not trigger a restart); `GET /api/ready` checks the database and answers
-**503** when it is unreachable.
+**503** when it is unreachable. `GET /api/version` reports the running build
+(`version`, `commit`, `dirty`) — `make deploy` polls it to confirm the new
+binary is actually serving, since a successful upload is not evidence that
+systemd restarted into it.
 
 ### Quick Start
 
@@ -124,9 +127,22 @@ Auto-setup logic:
 - `reality` — VLESS Reality only; no domain required
 - Manual override via `protocols` field
 
-Reality handshake targets are tested from the node and the fastest TLS 1.3
-candidate is selected. Existing Reality credentials and handshake settings are
-preserved during repeat setup.
+Reality handshake targets are tested from the node. A candidate qualifies only
+if it answers over **HTTP/2 with a non-error status**; latency merely orders the
+candidates that already pass. Ranking on latency alone selects CDN edges, and a
+CDN edge is the wrong answer: REALITY forwards a failed probe to this target, so
+a prober would see a big-site certificate on a server that speaks no h2 and
+refuses the root path — an inconsistency the real site never shows.
+
+Repeat setup **re-evaluates** the stored handshake target and listen port rather
+than skipping an inbound because it exists, so later improvements reach nodes
+that were provisioned earlier. Reality credentials (keypair, short ID) and user
+UUIDs are preserved, so re-running setup never invalidates issued subscriptions.
+
+Listen ports are chosen from conventional HTTPS ports (443, then 8443/2053/2083/
+2087/2096), skipping whatever the node already has bound — a panel host running
+Caddy on 443 keeps it. A random high port is an anomaly no protocol can paper
+over: no Apple or Microsoft edge serves TLS on port 31795.
 
 ## API
 
@@ -182,6 +198,17 @@ there is no separate cert-issue or DNS-check endpoint.
 - `POST /api/nodes/{id}/generate` — preview config (dry-run)
 - `POST /api/nodes/{id}/push` — push + restart
 - `POST /api/batch/push-all` — push all enabled nodes
+- `POST /api/batch/reprovision` — re-run auto-setup across enabled nodes
+  (`{"mode":"auto","node_ids":[1,2],"dry_run":true}`; all fields optional).
+  Nodes are processed **one at a time** — each one restarts sing-box, so a
+  parallel run would take the whole fleet down together. Answers **207** when
+  only some nodes succeed and **502** when none do, so a caller that checks
+  only the status code cannot read a partial rollout as a complete one.
+  Start with `dry_run` to see which nodes a run would touch.
+
+  Rolling a protocol change across every node is an operation the panel owns,
+  not something to drive with ad-hoc SSH loops: those exist only in one
+  terminal session, cannot be re-run, and tend to park an admin token on disk.
 - `GET /api/nodes/{id}/raw-config` — inspect deployed config (read-only)
 
 ### Subscription (no auth)
