@@ -195,6 +195,17 @@ there is no separate cert-issue or DNS-check endpoint.
 - `POST /api/nodes/{id}/generate` — preview config (dry-run)
 - `POST /api/nodes/{id}/push` — push + restart
 - `POST /api/batch/push-all` — push all enabled nodes
+- `POST /api/batch/reprovision` — re-run auto-setup across enabled nodes
+  (`{"mode":"auto","node_ids":[1,2],"dry_run":true}`; all fields optional).
+  Nodes are processed **one at a time** — each one restarts sing-box, so a
+  parallel run would take the whole fleet down together. Answers **207** when
+  only some nodes succeed and **502** when none do, so a caller that checks
+  only the status code cannot read a partial rollout as a complete one.
+  Start with `dry_run` to see which nodes a run would touch.
+
+  Rolling a protocol change across every node is an operation the panel owns,
+  not something to drive with ad-hoc SSH loops: those exist only in one
+  terminal session, cannot be re-run, and tend to park an admin token on disk.
 - `GET /api/nodes/{id}/raw-config` — inspect deployed config (read-only)
 
 ### Subscription (no auth)

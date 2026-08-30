@@ -144,6 +144,12 @@ POST /api/users/{id}/reset-traffic
 - `POST /api/nodes/{id}/generate` — 预览配置
 - `POST /api/nodes/{id}/push` — 推送并重启
 - `POST /api/batch/push-all` — 推送所有节点
+- `POST /api/batch/reprovision` — 对所有启用节点重跑 auto-setup（协议加固、握手目标
+  或端口策略升级后用它，不要手工 ssh 上机循环调单节点接口）。
+  `{"mode":"auto","node_ids":[1,2],"dry_run":true}` 各字段均可省。
+  **逐个串行**（每个节点会重启 sing-box，并行等于全网同时断）；
+  部分成功返回 **207**、全部失败返回 **502**，只看状态码不会把"半个机群"误读成成功。
+  先用 `dry_run: true` 看会动哪些节点。
 - `GET /api/nodes/{id}/raw-config` — 只读查看已部署配置；不支持手动写入
 
 ### 证书

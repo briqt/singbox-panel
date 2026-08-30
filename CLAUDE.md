@@ -23,6 +23,7 @@ make deploy DEPLOY_HOST=<ssh别名>   # 构建 + 上传 + 重启 systemd
 | `GET /api/ready` | 就绪探针。查数据库可达性，不可达返 **503** |
 | `POST /api/nodes/{id}/tune` | 对存量节点重新应用内核基线并回读校验 |
 | `POST /api/nodes/{id}/cert-renew` | 重签 TLS 入站的证书并回读校验，不动端口与 Reality 密钥（`{"force":true}` 可无视有效期强制重签） |
+| `POST /api/batch/reprovision` | 对所有启用节点重跑 auto-setup，逐个串行；部分成功 207、全失败 502，`{"dry_run":true}` 先看会动谁 |
 
 ## 仓库结构
 
@@ -43,7 +44,8 @@ make deploy DEPLOY_HOST=<ssh别名>   # 构建 + 上传 + 重启 systemd
 │   ├── traffic.go          #   流量轮询器
 │   ├── cert.go             #   TLS 证书签发/续期/到期回读（单一权威）
 │   ├── nodeops.go          #   装/升级/状态/tune/cert-renew
-│   └── setup.go            #   一键纳管
+│   ├── setup.go            #   一键纳管
+│   └── reprovision.go      #   批量重跑 auto-setup（全网协议升级走这里）
 ├── singbox/                # sing-box 配置与 Clash 订阅生成
 ├── web/                    # React + Vite + antd SPA（dist 入库占位，node_modules 不入库）
 └── deploy/                 # systemd 单元
@@ -77,6 +79,8 @@ CI（`.github/workflows`）跑 `make test` 后交叉编译 linux 的 amd64 与 a
 - **证伪要证伪到"值"，`strings.Contains` 会放水。** `obfs-password=<pw>` 是 `obfs-password=<pw>x` 的前缀，所以把客户端密码改错、用 `Contains` 断言的测试照样绿。第一版 `TestHysteria2ObfsPasswordReachesEveryClientFormat` 就是这么骗过证伪的。断言配置项一律解析出**值**再比（URI 走 `url.Parse` 取 query，YAML 走整行匹配），别拿子串糊弄。
 - **测得快不等于伪装得像。** `selectRealitySNI` 原本只按 `time_appconnect` 排序挑最快的候选，于是 CDN 边缘必胜——三个直连节点全选中 `updates.cdn-apple.com`，而它答 HTTP/1.1 加 403，跟它冒充的站行为对不上。REALITY 会把探测流量回落到这个目标，所以判据得落在**行为可信度**（h2 + 非错误状态码）上，延迟只配在合格者之间做排序。
 - **"已存在就跳过"会把配置永久冻在第一次的取值上。** `auto-setup` 曾对已有的 Reality 入站无条件 `skipped`，结果任何后续改进都够不着最需要它的那批节点。幂等应当是"重新求值，结果相同才跳过"，不是"存在就不看"。重配时要区分**可换的**（端口、握手目标）与**换了就废掉已发订阅的**（密钥对、short_id、UUID），后者必须原样保留。
+- **要对每个节点做的事，必须是面板的一条代码路径，不能是当场敲的 ssh 循环。** 2026-08-30 的协议加固就是反例：改动本身走了仓库和发版，可"把新配置铺到 4 个节点"却是 ssh 上机、heredoc 拼 curl + 内联 python 干的——只存在于那一个终端会话，谁也没法重跑，还为了少登录几次把 admin JWT 落到了节点的 `/tmp`。`POST /api/batch/reprovision` 是补上的正确形态：逻辑在代码里、有测试、随版本发布、留下可复现的调用。**判断标准是"能不能原样再来一次"，不是"这次成没成功"。**
+- **批量操作的状态码要能区分"全成"和"半成"。** 只看状态码的调用方会把 200 读成"整个机群都好了"。`reprovision` 因此全失败返 502、部分成功返 207，且每个节点各自带 `status` 与失败原因。
 - **阈值只调到仍能捕捉回归的位置，不调到消音。** 见 `web/vite.config.ts` 的 `chunkSizeWarningLimit`。
 - **前端分包是否生效，看 `dist/index.html` 的 `script` 与 `modulepreload` 列表，不看 chunk 体积表。** 手动命名一个 chunk 会把它拉进入口的预加载列表，体积表上"拆开了"、浏览器首屏照样下载。同理 `manualChunks` 必须按 `node_modules/` 之后的完整包名段匹配——`recharts` 的路径里含 `react`，子串匹配会把图表库塞进首屏。
 
