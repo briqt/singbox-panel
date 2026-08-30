@@ -41,6 +41,10 @@ jobs:
             goarch: arm64
     steps:
       - uses: actions/checkout@v4
+        with:
+          # git describe needs tags and history; a shallow clone would stamp
+          # every release binary as "dev".
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
@@ -54,12 +58,14 @@ jobs:
         run: corepack pnpm install --frozen-lockfile && corepack pnpm build
         working-directory: web
 
+      # Same stamp as `make build`, so a release artifact and a locally built
+      # binary report the same version for the same commit.
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          go build -trimpath -ldflags="-s -w" -o singbox-panel-${{ matrix.goos }}-${{ matrix.goarch }} .
+          make build-stamped OUT=singbox-panel-${{ matrix.goos }}-${{ matrix.goarch }}
 
       - uses: actions/upload-artifact@v4
         with:

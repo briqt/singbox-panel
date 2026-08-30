@@ -11,9 +11,11 @@
 ```bash
 make web      # 前端产物；go build / go test 之前必须先跑（go:embed 需要 web/dist 存在）
 make test     # 质量闸：go test ./... + 前端 oxlint
-make build    # 交叉编译 linux/amd64 到 bin/singbox-panel
-make deploy DEPLOY_HOST=<ssh别名>   # 构建 + 上传 + 重启 systemd
+make build    # 交叉编译 linux/amd64 到 bin/singbox-panel，版本戳写进二进制
+make deploy DEPLOY_HOST=<ssh别名>   # 构建 + 上传 + 重启 + 回读 /api/version 确认新构建在服务
 ```
+
+发布走 tag：`git tag vX.Y.Z && git push origin vX.Y.Z`，CI 交叉编译 linux 的 amd64/arm64 并发 Release。
 
 前端单独开发：`cd web && corepack pnpm dev`（`/api`、`/sub` 代理到 `127.0.0.1:2082`）。
 
@@ -24,6 +26,7 @@ make deploy DEPLOY_HOST=<ssh别名>   # 构建 + 上传 + 重启 systemd
 | `POST /api/nodes/{id}/tune` | 对存量节点重新应用内核基线并回读校验 |
 | `POST /api/nodes/{id}/cert-renew` | 重签 TLS 入站的证书并回读校验，不动端口与 Reality 密钥（`{"force":true}` 可无视有效期强制重签） |
 | `POST /api/batch/reprovision` | 对所有启用节点重跑 auto-setup，逐个串行；部分成功 207、全失败 502，`{"dry_run":true}` 先看会动谁 |
+| `GET /api/version` | 当前运行的构建（version/commit/dirty）。免鉴权，`make deploy` 用它确认新二进制真的在服务 |
 
 ## 仓库结构
 
@@ -79,6 +82,8 @@ CI（`.github/workflows`）跑 `make test` 后交叉编译 linux 的 amd64 与 a
 - **证伪要证伪到"值"，`strings.Contains` 会放水。** `obfs-password=<pw>` 是 `obfs-password=<pw>x` 的前缀，所以把客户端密码改错、用 `Contains` 断言的测试照样绿。第一版 `TestHysteria2ObfsPasswordReachesEveryClientFormat` 就是这么骗过证伪的。断言配置项一律解析出**值**再比（URI 走 `url.Parse` 取 query，YAML 走整行匹配），别拿子串糊弄。
 - **测得快不等于伪装得像。** `selectRealitySNI` 原本只按 `time_appconnect` 排序挑最快的候选，于是 CDN 边缘必胜——三个直连节点全选中 `updates.cdn-apple.com`，而它答 HTTP/1.1 加 403，跟它冒充的站行为对不上。REALITY 会把探测流量回落到这个目标，所以判据得落在**行为可信度**（h2 + 非错误状态码）上，延迟只配在合格者之间做排序。
 - **"已存在就跳过"会把配置永久冻在第一次的取值上。** `auto-setup` 曾对已有的 Reality 入站无条件 `skipped`，结果任何后续改进都够不着最需要它的那批节点。幂等应当是"重新求值，结果相同才跳过"，不是"存在就不看"。重配时要区分**可换的**（端口、握手目标）与**换了就废掉已发订阅的**（密钥对、short_id、UUID），后者必须原样保留。
+- **"部署命令退出码 0"不等于新版本在服务。** systemd 可能重启的还是旧二进制，新的也可能启动即死、留着旧进程继续应答。`make deploy` 因此以 `verify-deploy` 收尾：轮询 `/api/version`，直到服务自报的 commit 与本次构建一致才算成功，否则打印 journal 并以非零码退出。判据落在"谁在应答"，不落在"文件传过去了"。
+- **版本戳不能用 `date`。** 用 wall-clock 时间会让每次重建都产出不同二进制，直接废掉"线上二进制可从 git 复现"这条发布前检查。取 commit 时间（`git show -s --format=%cI`）。
 - **要对每个节点做的事，必须是面板的一条代码路径，不能是当场敲的 ssh 循环。** 2026-08-30 的协议加固就是反例：改动本身走了仓库和发版，可"把新配置铺到 4 个节点"却是 ssh 上机、heredoc 拼 curl + 内联 python 干的——只存在于那一个终端会话，谁也没法重跑，还为了少登录几次把 admin JWT 落到了节点的 `/tmp`。`POST /api/batch/reprovision` 是补上的正确形态：逻辑在代码里、有测试、随版本发布、留下可复现的调用。**判断标准是"能不能原样再来一次"，不是"这次成没成功"。**
 - **批量操作的状态码要能区分"全成"和"半成"。** 只看状态码的调用方会把 200 读成"整个机群都好了"。`reprovision` 因此全失败返 502、部分成功返 207，且每个节点各自带 `status` 与失败原因。
 - **阈值只调到仍能捕捉回归的位置，不调到消音。** 见 `web/vite.config.ts` 的 `chunkSizeWarningLimit`。

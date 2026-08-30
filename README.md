@@ -57,7 +57,10 @@ panel.example.com {
 
 Probes: `GET /api/health` reports only that the process is up (a dependency blip
 must not trigger a restart); `GET /api/ready` checks the database and answers
-**503** when it is unreachable.
+**503** when it is unreachable. `GET /api/version` reports the running build
+(`version`, `commit`, `dirty`) — `make deploy` polls it to confirm the new
+binary is actually serving, since a successful upload is not evidence that
+systemd restarted into it.
 
 ### Quick Start
 
