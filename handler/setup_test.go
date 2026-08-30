@@ -155,14 +155,14 @@ func TestParseListeningPortsReadsRealSSOutput(t *testing.T) {
 // tokyo's exact situation: Caddy owns 443 for panel/hs/derp/fn, so Reality has
 // to land on the next conventional port rather than stealing the web stack's.
 func TestSelectListenPortFallsBackWhenPreferredIsTaken(t *testing.T) {
-	port := selectListenPort(func(string) (string, error) { return ssTCPWithCaddyOn443, nil }, "tcp", 31795)
+	port := selectListenPort(func(string) (string, error) { return ssTCPWithCaddyOn443, nil }, "tcp", 31795, map[int]bool{})
 	if port != 8443 {
 		t.Fatalf("port=%d want 8443", port)
 	}
 }
 
 func TestSelectListenPortPrefers443WhenFree(t *testing.T) {
-	port := selectListenPort(func(string) (string, error) { return ssTCPBare, nil }, "tcp", 0)
+	port := selectListenPort(func(string) (string, error) { return ssTCPBare, nil }, "tcp", 0, map[int]bool{})
 	if port != 443 {
 		t.Fatalf("port=%d want 443", port)
 	}
@@ -173,7 +173,7 @@ func TestSelectListenPortPrefers443WhenFree(t *testing.T) {
 // walk one step down the preference list on every single run.
 func TestSelectListenPortKeepsThePortItAlreadyOwns(t *testing.T) {
 	occupied := ssTCPBare + "LISTEN 0 4096 *:443 *:* users:((\"sing-box\",pid=7,fd=9))\n"
-	port := selectListenPort(func(string) (string, error) { return occupied, nil }, "tcp", 443)
+	port := selectListenPort(func(string) (string, error) { return occupied, nil }, "tcp", 443, map[int]bool{})
 	if port != 443 {
 		t.Fatalf("port=%d want 443 (its own listener must not count against it)", port)
 	}
@@ -189,7 +189,7 @@ func TestListeningPortsRejectsUnparseableOutput(t *testing.T) {
 }
 
 func TestSelectListenPortFallsBackToCurrentPortWhenProbeFails(t *testing.T) {
-	port := selectListenPort(func(string) (string, error) { return "", errProbeFailed }, "udp", 24307)
+	port := selectListenPort(func(string) (string, error) { return "", errProbeFailed }, "udp", 24307, map[int]bool{})
 	if port != 24307 {
 		t.Fatalf("port=%d want the port already in use", port)
 	}
@@ -203,5 +203,39 @@ func TestListeningPortsAsksForTheRightL4Network(t *testing.T) {
 	}, "udp")
 	if !contains(got, "-lnu") {
 		t.Fatalf("udp probe did not ask for udp sockets: %q", got)
+	}
+}
+
+// A fresh CDN node assigns HTTPUpgrade 443 and then asks for a Reality port
+// before anything has been pushed, so the node probe still shows 443 as free.
+// Only the in-run reservation stops both inbounds landing on it, which would
+// make sing-box refuse to start.
+func TestSelectListenPortDoesNotReissueAPortClaimedEarlierInTheSameRun(t *testing.T) {
+	reserved := map[int]bool{}
+	probe := func(string) (string, error) { return ssTCPBare, nil }
+
+	first := selectListenPort(probe, "tcp", 0, reserved)
+	second := selectListenPort(probe, "tcp", 0, reserved)
+	if first != 443 {
+		t.Fatalf("first=%d want 443", first)
+	}
+	if second == first {
+		t.Fatalf("both inbounds were handed port %d", second)
+	}
+	if second != 8443 {
+		t.Fatalf("second=%d want 8443", second)
+	}
+}
+
+// TCP and UDP are separate namespaces: Reality on tcp/443 must not push
+// Hysteria2 off udp/443.
+func TestSelectListenPortKeepsTCPAndUDPReservationsApart(t *testing.T) {
+	reserved := map[string]map[int]bool{"tcp": {}, "udp": {}}
+	probe := func(string) (string, error) { return ssTCPBare, nil }
+
+	tcp := selectListenPort(probe, "tcp", 0, reserved["tcp"])
+	udp := selectListenPort(probe, "udp", 0, reserved["udp"])
+	if tcp != 443 || udp != 443 {
+		t.Fatalf("tcp=%d udp=%d; both should be able to use 443", tcp, udp)
 	}
 }

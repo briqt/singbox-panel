@@ -182,6 +182,8 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 		return errors.Join(rollbackErrors...)
 	}
 
+	// Ports handed out during this run, per L4 network. See selectListenPort.
+	reservedPorts := map[string]map[int]bool{"tcp": {}, "udp": {}}
 	hadError := false
 	for _, proto := range req.Protocols {
 		existing, exists := existingProtos[proto]
@@ -207,7 +209,7 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 			}
 			desiredPort := req.Ports.Hysteria2
 			if desiredPort == 0 {
-				desiredPort = selectListenPort(runner, "udp", currentPort)
+				desiredPort = selectListenPort(runner, "udp", currentPort, reservedPorts["udp"])
 			}
 			if exists {
 				oldDomain, _ := oldSettings["domain"].(string)
@@ -306,7 +308,7 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 
 			port := req.Ports.Reality
 			if port == 0 {
-				port = selectListenPort(runner, "tcp", currentPort)
+				port = selectListenPort(runner, "tcp", currentPort, reservedPorts["tcp"])
 			}
 			if privateKey == "" || publicKey == "" {
 				keypairOut, err := sshRun(client, node.SingboxBin+" generate reality-keypair")
@@ -397,6 +399,7 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 					port = 443
 				}
 			}
+			reservedPorts["tcp"][port] = true
 			path := ""
 			if exists {
 				path, _ = oldSettings["path"].(string)
@@ -523,23 +526,38 @@ var conventionalPorts = []int{443, 8443, 2053, 2083, 2087, 2096}
 // or "udp") on the node. currentPort is the port this inbound already owns; it
 // counts as free so that re-running setup on an already-correct node is a
 // no-op instead of walking down the preference list every time.
-func selectListenPort(run commandRunner, network string, currentPort int) int {
+//
+// reserved carries the ports already handed out earlier in this same setup run
+// and is updated with the result. The node probe cannot supply this: it reports
+// what is *listening*, and nothing this run assigned is listening yet — the
+// config is not pushed until every protocol has been processed. Without it, a
+// fresh CDN node would give 443 to HTTPUpgrade and then hand the same 443 to
+// Reality, and sing-box would refuse to start.
+func selectListenPort(run commandRunner, network string, currentPort int, reserved map[int]bool) int {
+	port := pickListenPort(run, network, currentPort, reserved)
+	if reserved != nil {
+		reserved[port] = true
+	}
+	return port
+}
+
+func pickListenPort(run commandRunner, network string, currentPort int, reserved map[int]bool) int {
 	occupied, err := listeningPorts(run, network)
 	if err != nil {
 		// Never fail setup over a probe: fall back to what the node already
 		// uses, or to the old random behaviour for a fresh inbound.
-		if currentPort != 0 {
+		if currentPort != 0 && !reserved[currentPort] {
 			return currentPort
 		}
 		return randomPort()
 	}
 	delete(occupied, currentPort)
 	for _, port := range conventionalPorts {
-		if !occupied[port] {
+		if !occupied[port] && !reserved[port] {
 			return port
 		}
 	}
-	if currentPort != 0 {
+	if currentPort != 0 && !reserved[currentPort] {
 		return currentPort
 	}
 	return randomPort()
