@@ -188,6 +188,27 @@ func TestListeningPortsRejectsUnparseableOutput(t *testing.T) {
 	}
 }
 
+// A brand-new VPS often has no UDP listeners at all. That is a valid empty
+// table, not a probe failure — treating it as failure used to send Hysteria2
+// to randomPort() (20000-49999) on the first setup run.
+func TestSelectListenPortUDPWithNoListenersGets443(t *testing.T) {
+	header := "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+	port := selectListenPort(func(string) (string, error) { return header, nil }, "udp", 0, map[int]bool{})
+	if port != 443 {
+		t.Fatalf("port=%d want 443 on a node with no UDP listeners", port)
+	}
+}
+
+func TestListeningPortsUDPEmptyTableIsNotAnError(t *testing.T) {
+	ports, err := listeningPorts(func(string) (string, error) { return "", nil }, "udp")
+	if err != nil {
+		t.Fatalf("empty UDP table must be valid, got %v", err)
+	}
+	if len(ports) != 0 {
+		t.Fatalf("ports=%v want empty", ports)
+	}
+}
+
 func TestSelectListenPortFallsBackToCurrentPortWhenProbeFails(t *testing.T) {
 	port := selectListenPort(func(string) (string, error) { return "", errProbeFailed }, "udp", 24307, map[int]bool{})
 	if port != 24307 {

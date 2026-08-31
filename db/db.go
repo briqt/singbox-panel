@@ -63,8 +63,8 @@ CREATE TABLE IF NOT EXISTS nodes (
 	domain TEXT NOT NULL DEFAULT '',
 	ssh_user TEXT NOT NULL DEFAULT 'root',
 	proxy_type TEXT NOT NULL DEFAULT 'singbox',
-	config_path TEXT NOT NULL DEFAULT '/etc/v2ray-agent/sing-box/conf/config.json',
-	singbox_bin TEXT NOT NULL DEFAULT '/etc/v2ray-agent/sing-box/sing-box',
+	config_path TEXT NOT NULL DEFAULT '/etc/sing-box/config.json',
+	singbox_bin TEXT NOT NULL DEFAULT '/usr/local/bin/sing-box',
 	agent_token TEXT NOT NULL DEFAULT '',
 	enabled INTEGER NOT NULL DEFAULT 1,
 	created_at TEXT DEFAULT (datetime('now'))

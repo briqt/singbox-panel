@@ -269,7 +269,7 @@ func (h *NodeOpsHandler) install(w http.ResponseWriter, r *http.Request) {
 
 	binPath := node.SingboxBin
 	if binPath == "" {
-		binPath = "/usr/local/bin/sing-box"
+		binPath = model.DefaultSingboxBin
 	}
 
 	// Download and install. Uses the fork build (with_v2ray_api tag) so the
@@ -281,22 +281,7 @@ func (h *NodeOpsHandler) install(w http.ResponseWriter, r *http.Request) {
 	// binary beside the target and mv it into place. rename(2) swaps the
 	// directory entry while the running process keeps its old inode, so the
 	// upgrade takes effect on the next restart (the config push that follows).
-	installScript := fmt.Sprintf(`
-set -e
-cd /tmp
-rm -rf sing-box-install
-mkdir sing-box-install && cd sing-box-install
-curl -sL "%s" -o sb.tar.gz
-tar xzf sb.tar.gz
-BIN=$(find . -name "sing-box" -type f | head -1)
-[ -n "$BIN" ] || { echo "sing-box binary not found in archive"; exit 1; }
-install -m 0755 "$BIN" "%s.new"
-mv -f "%s.new" "%s"
-rm -rf /tmp/sing-box-install
-%s version
-`, url, binPath, binPath, binPath, binPath)
-
-	out, err := sshRun(client, installScript)
+	out, err := sshRun(client, installBinaryScript(url, binPath))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "install failed: "+strings.TrimSpace(out))
 		return
@@ -405,4 +390,26 @@ func (h *NodeOpsHandler) setupSSH(w http.ResponseWriter, r *http.Request) {
 	verifyClient.Close()
 
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "node": node.Name, "message": "SSH key auth configured successfully"})
+}
+
+// installBinaryScript stages the unpacked binary next to the target and
+// renames it into place. mkdir -p is load-bearing: a clean machine does not
+// have the parent directory, and `install` will not create it (that is how
+// laxcc first failed — default path was still the old v2ray-agent tree).
+func installBinaryScript(url, binPath string) string {
+	return fmt.Sprintf(`
+set -e
+cd /tmp
+rm -rf sing-box-install
+mkdir sing-box-install && cd sing-box-install
+curl -sL "%s" -o sb.tar.gz
+tar xzf sb.tar.gz
+BIN=$(find . -name "sing-box" -type f | head -1)
+[ -n "$BIN" ] || { echo "sing-box binary not found in archive"; exit 1; }
+mkdir -p "$(dirname "%s")"
+install -m 0755 "$BIN" "%s.new"
+mv -f "%s.new" "%s"
+rm -rf /tmp/sing-box-install
+"%s" version
+`, url, binPath, binPath, binPath, binPath, binPath)
 }

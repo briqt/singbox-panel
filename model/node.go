@@ -42,6 +42,14 @@ type NodeStore struct {
 	DB *sql.DB
 }
 
+// Default layout for a newly created node. The previous v2ray-agent paths
+// made install fail on a clean machine: the parent directory does not exist,
+// and none of the live nodes use that tree anymore.
+const (
+	DefaultSingboxBin = "/usr/local/bin/sing-box"
+	DefaultConfigPath = "/etc/sing-box/config.json"
+)
+
 func (s *NodeStore) List() ([]Node, error) {
 	rows, err := s.DB.Query(`SELECT id, name, host, port, domain, ssh_user, COALESCE(ssh_password,''), proxy_type, config_path, singbox_bin, agent_token, enabled, COALESCE(sort_order,0), created_at FROM nodes ORDER BY sort_order, id`)
 	if err != nil {
@@ -107,10 +115,10 @@ func (s *NodeStore) Create(req CreateNodeReq) (*Node, error) {
 		req.ProxyType = "singbox"
 	}
 	if req.ConfigPath == "" {
-		req.ConfigPath = "/etc/v2ray-agent/sing-box/conf/config.json"
+		req.ConfigPath = DefaultConfigPath
 	}
 	if req.SingboxBin == "" {
-		req.SingboxBin = "/etc/v2ray-agent/sing-box/sing-box"
+		req.SingboxBin = DefaultSingboxBin
 	}
 	token := generateToken()
 	res, err := s.DB.Exec(`INSERT INTO nodes (name, host, port, domain, ssh_user, proxy_type, config_path, singbox_bin, agent_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,

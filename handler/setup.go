@@ -576,10 +576,14 @@ func listeningPorts(run commandRunner, network string) (map[int]bool, error) {
 		return nil, fmt.Errorf("unable to read listening ports on node")
 	}
 	ports := parseListeningPorts(out)
-	if len(ports) == 0 {
-		// A node always has at least sshd listening. An empty parse means the
-		// output shape was not what we expected, and treating "parsed nothing"
-		// as "everything is free" would hand out a port already in use.
+	if len(ports) == 0 && network != "udp" {
+		// TCP always has sshd. An empty parse means the output shape was not
+		// what we expected, and treating "parsed nothing" as "everything is
+		// free" would hand out a port already in use.
+		// UDP is different: a fresh node often has no UDP listeners at all,
+		// and that used to be misread as a probe failure — Hysteria2 then
+		// fell through to randomPort() (20000-49999), which is exactly the
+		// anomaly conventionalPorts exists to prevent.
 		return nil, fmt.Errorf("listening-port probe returned no usable rows")
 	}
 	return ports, nil
