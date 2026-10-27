@@ -125,14 +125,34 @@ func TestPickRealityDestStaysInsideTheFastestFew(t *testing.T) {
 	}
 }
 
-// Regression guard: these two were dropped because CDN edges never answer the
-// root path the way the site they front does. Keeping them in the list meant
-// every auto-setup spent a 5s timeout on targets that could never qualify.
-func TestRealityCandidatesExcludeCdnEdges(t *testing.T) {
-	for _, banned := range []string{"updates.cdn-apple.com", "swcdn.apple.com"} {
-		for _, host := range realitySNIs {
-			if host == banned {
-				t.Fatalf("%s is back in the candidate list", banned)
+// Two ways a candidate gets dropped, both guarded here.
+//
+// CDN edges never answer the root path the way the site they front does, so they
+// can never qualify and only cost every auto-setup a 5s timeout.
+//
+// Big names nobody in mainland China actually reaches over the gateway —
+// samsung.com, intel.com, nvidia.com — do pass TLS, but a node whose SNI
+// histogram is all intel.com is a low-frequency sample wearing a famous name.
+// Their consumer traffic goes to jd.com and nvidia.cn instead.
+func TestRealityCandidatesStayPlausibleAndQualifiable(t *testing.T) {
+	banned := []string{
+		"updates.cdn-apple.com", "swcdn.apple.com",
+		"www.samsung.com", "www.intel.com", "www.nvidia.com", "www.mozilla.org",
+	}
+	for _, host := range realitySNIs {
+		for _, b := range banned {
+			if host == b {
+				t.Fatalf("%s is back in the candidate list", b)
+			}
+		}
+	}
+	// A censored name must never be a target: REALITY with a reset SNI would
+	// complete a handshake the prober knows should have been reset.
+	censored := []string{"www.google.com", "github.com", "www.youtube.com", "x.com"}
+	for _, host := range realitySNIs {
+		for _, b := range censored {
+			if host == b {
+				t.Fatalf("censored host %s must not be a Reality target", b)
 			}
 		}
 	}

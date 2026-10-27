@@ -40,23 +40,34 @@ type AutoSetupReq struct {
 	} `json:"ports"`
 }
 
-// Reality handshake targets. Every entry must be able to pass the probe on its
-// own merits — TLS 1.3, HTTP/2 or /3, root status under 400 — because REALITY
-// forwards failed probes here and a prober then sees whatever this host shows.
+// Reality handshake targets. Two properties decide membership.
 //
-// Two entries were removed rather than left in to fail the probe every run:
-// updates.cdn-apple.com answered HTTP/1.1 with 403 and swcdn.apple.com HTTP/1.1
-// with 404, both CDN edges that no real site's root path behaves like. They
-// only ever contributed a 5s timeout to every auto-setup.
+// First, the host must pass the probe on its own merits — TLS 1.3, HTTP/2 or /3,
+// root status under 400 — because REALITY forwards failed probes here and a
+// prober then sees whatever this host shows. updates.cdn-apple.com (HTTP/1.1 +
+// 403) and swcdn.apple.com (HTTP/1.1 + 404) were dropped for failing exactly
+// that; all they ever contributed was a 5s timeout per auto-setup.
+//
+// Second, the host has to be one a mainland user plausibly reaches over the
+// international gateway. A target that passes TLS but that nobody actually
+// visits is a low-frequency sample wearing a big name: www.samsung.com,
+// www.intel.com and www.nvidia.com all answer correctly (301/307) yet almost no
+// consumer in China types them — people buy the phone on JD and download the
+// driver from nvidia.cn. Impersonating them makes the node's SNI histogram look
+// stranger than impersonating a site with real traffic behind it. They are out;
+// www.bing.com, www.office.com and www.icloud.com are in for the same reason.
+//
+// Deliberately absent: anything already censored or SNI-filtered (google,
+// youtube, github, twitter). A censored name succeeding the TLS handshake is
+// itself the anomaly — the prober expects a reset.
 var realitySNIs = []string{
 	"www.apple.com",
+	"www.icloud.com",
 	"www.microsoft.com",
+	"www.bing.com",
+	"www.office.com",
 	"www.amazon.com",
 	"www.cloudflare.com",
-	"www.mozilla.org",
-	"www.samsung.com",
-	"www.intel.com",
-	"www.nvidia.com",
 	"www.kimi.com",
 }
 
