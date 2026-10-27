@@ -87,19 +87,61 @@ func TestSelectRealitySNIUsesSuccessfulFastestProbe(t *testing.T) {
 			t.Fatal("probe command is empty")
 		}
 		return "www.apple.com 2 200 0.090\nwww.mozilla.org 2 200 0.052\n", nil
-	})
+	}, "node-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if host != "www.mozilla.org" {
-		t.Fatalf("host=%q", host)
+	if host != "www.mozilla.org" && host != "www.apple.com" {
+		t.Fatalf("host=%q is not one of the two qualifying targets", host)
+	}
+}
+
+// A fleet that all impersonated the same site would go dark together the day
+// that site stops behaving. Two names must be able to land on different
+// targets, and the same name must keep landing on the same one.
+func TestPickRealityDestSpreadsNodesAndStaysStable(t *testing.T) {
+	candidates := []string{"www.apple.com", "www.mozilla.org", "www.amazon.com", "www.kimi.com"}
+	seen := map[string]bool{}
+	for _, seed := range []string{"tokyo", "laxpro", "lax03", "laxcc", "de", "sjc", "fra", "hkg"} {
+		first := pickRealityDest(candidates, seed)
+		if again := pickRealityDest(candidates, seed); again != first {
+			t.Fatalf("seed %q is not stable: %q then %q", seed, first, again)
+		}
+		seen[first] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("every seed collapsed onto one target: %v", seen)
+	}
+}
+
+func TestPickRealityDestStaysInsideTheFastestFew(t *testing.T) {
+	candidates := []string{"a.com", "b.com", "c.com", "d.com"}
+	for _, seed := range []string{"tokyo", "laxpro", "lax03", "laxcc", "de"} {
+		switch pickRealityDest(candidates, seed) {
+		case "a.com", "b.com", "c.com":
+		default:
+			t.Fatalf("seed %q picked outside the latency-bounded set", seed)
+		}
+	}
+}
+
+// Regression guard: these two were dropped because CDN edges never answer the
+// root path the way the site they front does. Keeping them in the list meant
+// every auto-setup spent a 5s timeout on targets that could never qualify.
+func TestRealityCandidatesExcludeCdnEdges(t *testing.T) {
+	for _, banned := range []string{"updates.cdn-apple.com", "swcdn.apple.com"} {
+		for _, host := range realitySNIs {
+			if host == banned {
+				t.Fatalf("%s is back in the candidate list", banned)
+			}
+		}
 	}
 }
 
 func TestSelectRealitySNIFailsWhenNoCandidateQualifies(t *testing.T) {
 	_, err := selectRealitySNI(func(string) (string, error) {
 		return "www.apple.com 1.1 403 0.010\nwww.mozilla.org 1.1 403 0.020\n", nil
-	})
+	}, "node-1")
 	if err == nil {
 		t.Fatal("expected an error when every candidate fails the behaviour check")
 	}

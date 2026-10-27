@@ -17,7 +17,7 @@ func TestExplicitRealityTargetMustPassProbe(t *testing.T) {
 		{"www.samsung.com 2 200 0.08\n", nil, false},
 		{"", errors.New("probe failed"), false},
 	} {
-		host, err := chooseRealitySNI(func(string) (string, error) { return tc.output, tc.err }, "www.samsung.com", "www.mozilla.org")
+		host, err := chooseRealitySNI(func(string) (string, error) { return tc.output, tc.err }, "www.samsung.com", "www.mozilla.org", "node-1")
 		if (err == nil) != tc.valid || (tc.valid && host != "www.mozilla.org") {
 			t.Fatalf("output=%q host=%q err=%v", tc.output, host, err)
 		}

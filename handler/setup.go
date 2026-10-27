@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"math/big"
 	"net"
 	"net/http"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +40,14 @@ type AutoSetupReq struct {
 	} `json:"ports"`
 }
 
+// Reality handshake targets. Every entry must be able to pass the probe on its
+// own merits — TLS 1.3, HTTP/2 or /3, root status under 400 — because REALITY
+// forwards failed probes here and a prober then sees whatever this host shows.
+//
+// Two entries were removed rather than left in to fail the probe every run:
+// updates.cdn-apple.com answered HTTP/1.1 with 403 and swcdn.apple.com HTTP/1.1
+// with 404, both CDN edges that no real site's root path behaves like. They
+// only ever contributed a 5s timeout to every auto-setup.
 var realitySNIs = []string{
 	"www.apple.com",
 	"www.microsoft.com",
@@ -47,8 +57,7 @@ var realitySNIs = []string{
 	"www.samsung.com",
 	"www.intel.com",
 	"www.nvidia.com",
-	"swcdn.apple.com",
-	"updates.cdn-apple.com",
+	"www.kimi.com",
 }
 
 func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
@@ -330,7 +339,10 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 			// Re-probe only when the stored target no longer behaves like the
 			// site it impersonates. Rotating a healthy SNI on every run would
 			// invalidate live subscriptions for no gain.
-			sni, probeErr := chooseRealitySNI(runner, storedSNI, req.RealitySNI)
+			// The node name seeds the choice so a fleet spread across the
+			// qualifying targets instead of every node converging on whichever
+			// one answered fastest from this region.
+			sni, probeErr := chooseRealitySNI(runner, storedSNI, req.RealitySNI, node.Name)
 			if probeErr != nil {
 				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: probeErr.Error()})
 				hadError = true
@@ -640,7 +652,7 @@ type commandRunner func(command string) (string, error)
 // may work from LA while its SNI gets reset on the user's network. An explicit
 // target lets an operator apply an end-to-end-tested choice through setup,
 // preserving the existing Reality identity. It still has to pass the TLS gate.
-func chooseRealitySNI(run commandRunner, stored, requested string) (string, error) {
+func chooseRealitySNI(run commandRunner, stored, requested, seed string) (string, error) {
 	if requested != "" {
 		if !validDomainName(requested) {
 			return "", fmt.Errorf("invalid Reality target domain")
@@ -657,19 +669,38 @@ func chooseRealitySNI(run commandRunner, stored, requested string) (string, erro
 	if stored != "" && realityDestStillQualifies(run, stored) {
 		return stored, nil
 	}
-	return selectRealitySNI(run)
+	return selectRealitySNI(run, seed)
 }
 
-func selectRealitySNI(run commandRunner) (string, error) {
+func selectRealitySNI(run commandRunner, seed string) (string, error) {
 	out, err := run(realityProbeScript())
 	if err != nil && strings.TrimSpace(out) == "" {
 		return "", fmt.Errorf("unable to probe Reality handshake targets")
 	}
-	host, _ := parseFastestRealityProbe(out)
-	if host == "" {
+	candidates := qualifiedRealityProbes(out)
+	if len(candidates) == 0 {
 		return "", fmt.Errorf("no Reality handshake target served HTTP/2 over TLS 1.3 with a non-error status")
 	}
-	return host, nil
+	return pickRealityDest(candidates, seed), nil
+}
+
+// pickRealityDest spreads a fleet across the fastest few qualifying targets.
+//
+// Sharing one target across every node is not a censorship problem — a popular
+// host is well covered by the noise of real traffic — but it is an availability
+// one: when that single site stops answering this region, or drops h2, or starts
+// refusing the root path, every node impersonating it goes dark in the same
+// minute. Latency still bounds the choice, so the spread costs only a few
+// milliseconds, and a stable seed keeps each node on its own answer instead of
+// reshuffling on every run.
+func pickRealityDest(candidates []string, seed string) string {
+	const spread = 3
+	if len(candidates) > spread {
+		candidates = candidates[:spread]
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(seed))
+	return candidates[int(h.Sum32())%len(candidates)]
 }
 
 // realityProbeScript measures every candidate from the node itself. It reports
@@ -722,12 +753,55 @@ func realityDestQualifies(httpVersion string, statusCode int) bool {
 	return statusCode >= 200 && statusCode < 400
 }
 
-func parseFastestRealityProbe(output string) (string, float64) {
+// qualifiedRealityProbes returns every candidate that passed the behaviour
+// check, fastest first. The whole list matters, not just its head: which target
+// a node ends up impersonating is decided by pickRealityDest, and that needs
+// alternatives to spread across.
+func qualifiedRealityProbes(output string) []string {
+	probes := parseQualifiedRealityProbes(output)
+	hosts := make([]string, len(probes))
+	for i, probe := range probes {
+		hosts[i] = probe.host
+	}
+	return hosts
+}
+
+type realityProbe struct {
+	host  string
+	delay float64
+}
+
+func parseQualifiedRealityProbes(output string) []realityProbe {
 	allowed := make(map[string]bool, len(realitySNIs))
 	for _, host := range realitySNIs {
 		allowed[host] = true
 	}
-	return parseRealityProbe(output, allowed)
+	var probes []realityProbe
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 4 || !allowed[fields[0]] {
+			continue
+		}
+		statusCode, err := strconv.Atoi(fields[2])
+		if err != nil || !realityDestQualifies(fields[1], statusCode) {
+			continue
+		}
+		latency, err := strconv.ParseFloat(fields[3], 64)
+		if err != nil || latency <= 0 {
+			continue
+		}
+		probes = append(probes, realityProbe{host: fields[0], delay: latency})
+	}
+	sort.SliceStable(probes, func(i, j int) bool { return probes[i].delay < probes[j].delay })
+	return probes
+}
+
+func parseFastestRealityProbe(output string) (string, float64) {
+	probes := parseQualifiedRealityProbes(output)
+	if len(probes) == 0 {
+		return "", 0
+	}
+	return probes[0].host, probes[0].delay
 }
 
 // parseRealityProbe keeps an allow-list so a probe line can only ever name a
