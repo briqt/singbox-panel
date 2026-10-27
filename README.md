@@ -288,6 +288,8 @@ and failed read-back; Cloudflare read-back does not prove resolver propagation
 or network reachability. A/AAAA records from the other IP family are unchanged.
 Never blanket-replace IPs in network configuration, SQLite files or SSH host keys.
 Unreachable hosts remain unaudited; repeat their audit once networking recovers.
+The audit reports unreadable files and directories explicitly; a clean match list
+does not cover those paths. Use the appropriate account to complete that scope.
 
 ## Building
 

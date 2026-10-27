@@ -14,12 +14,14 @@ import subprocess
 REMOTE = r'''
 import json, os, pathlib, sys
 needle = sys.argv[1].encode()
-matches, errors, scanned = [], 0, 0
+matches, unreadable, scanned = [], [], 0
+def walk_error(error):
+    unreadable.append(str(error.filename))
 for root in sys.argv[2:]:
     base = pathlib.Path(os.path.expanduser(root))
     if not base.exists():
         continue
-    for directory, dirs, files in os.walk(base):
+    for directory, dirs, files in os.walk(base, onerror=walk_error):
         dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", "logs", "log", "__pycache__")]
         for name in files:
             path = pathlib.Path(directory) / name
@@ -36,8 +38,10 @@ for root in sys.argv[2:]:
                 if count:
                     matches.append({"path": str(path), "occurrences": count})
             except OSError:
-                errors += 1
-print(json.dumps({"matches": matches, "files_scanned": scanned, "unreadable": errors}))
+                unreadable.append(str(path))
+paths = sorted(set(unreadable))
+print(json.dumps({"matches": matches, "files_scanned": scanned,
+                  "unreadable": len(paths), "unreadable_paths": paths}))
 '''
 
 
