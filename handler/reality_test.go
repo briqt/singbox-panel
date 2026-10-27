@@ -129,3 +129,28 @@ func TestRealityTargetsRejectsPost(t *testing.T) {
 		t.Fatalf("status=%d", rec.Code)
 	}
 }
+
+// The candidate list decides what is measured by default, not what is allowed.
+// A host that only works from one node is exactly what ?host= exists to find.
+func TestProbeAllRealityTargetsForMeasuresExtraHosts(t *testing.T) {
+	candidates := append(append([]string(nil), realitySNIs...), "www.example.com")
+	rows := probeAllRealityTargetsFor("www.example.com 2 200 0.070\n", candidates)
+	var found bool
+	for _, row := range rows {
+		if row.Host == "www.example.com" {
+			found = true
+			if !row.Qualifies {
+				t.Fatalf("extra host was measured but not qualified: %#v", row)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("a host passed via ?host= never reached the result table")
+	}
+	// Hosts outside the supplied set must still be ignored.
+	for _, row := range probeAllRealityTargetsFor("evil.invalid 2 200 0.001\n", candidates) {
+		if row.Host == "evil.invalid" {
+			t.Fatal("unrequested host accepted")
+		}
+	}
+}

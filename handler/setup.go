@@ -57,6 +57,14 @@ type AutoSetupReq struct {
 // stranger than impersonating a site with real traffic behind it. They are out;
 // www.bing.com, www.office.com and www.icloud.com are in for the same reason.
 //
+// This is a candidate list, not a whitelist. Membership only decides what gets
+// measured by default; whether a host is usable is settled per node by the
+// probe, and the probe result is the only thing that qualifies. www.deepseek.com
+// stays here despite failing from laxpro — from laxcc the same day it answered
+// h2 + 200 in 0.12s, while www.kimi.com returned 403 there and 200 from Tokyo.
+// Dropping a host because one node cannot reach it would throw away the nodes
+// that can.
+//
 // Deliberately absent: anything already censored or SNI-filtered (google,
 // youtube, github, twitter). A censored name succeeding the TLS handshake is
 // itself the anomaly — the prober expects a reset.
@@ -69,6 +77,7 @@ var realitySNIs = []string{
 	"www.amazon.com",
 	"www.cloudflare.com",
 	"www.kimi.com",
+	"www.deepseek.com",
 }
 
 func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {

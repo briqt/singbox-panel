@@ -175,8 +175,10 @@ POST /api/users/{id}/reset-traffic
 - `GET /api/nodes/{id}/reality-targets` — 在**这台节点上**实测全部候选，只读：
   返回每个目标的 `http` / `status` / `latency_ms` / `qualifies`，合格者按延迟排序，
   未应答的也列出来并注明原因。`current` 标出正在用的那个。
-  同一目标换个机房可能一个通一个不通（`www.deepseek.com` 在东京 200，在 LA 直接连不上），
+  同一目标换个机房可能一个通一个不通：`www.deepseek.com` 从 laxpro 连不上，从 laxcc
+  答 h2 + 200 / 0.12s；`www.kimi.com` 反过来在 laxcc 是 403、在东京是 200。
   所以这个问题只能按节点问，不能全局断言。
+  加 `?host=www.deepseek.com`（可重复）可把候选表之外的域名也一起测。
 - `POST /api/nodes/{id}/reality-target` — `{"sni":"www.bing.com"}` 换掉 Reality 的伪装目标。
   先在该节点上探测，过不了 TLS 1.3 + HTTP/2 + 非错误状态码就返 422；通过后只改
   `sni` 与 `handshake_server`，**密钥对 / short_id / 端口 / UUID 全部原样**，再推配置。

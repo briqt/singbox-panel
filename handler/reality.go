@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -62,6 +63,17 @@ func (h *NodeOpsHandler) HandleRealityTargets(w http.ResponseWriter, r *http.Req
 		}
 	}
 
+	// ?host=... measures something the candidate list does not cover, which is
+	// how a target that only works from this one node gets found at all.
+	candidates := append([]string(nil), realitySNIs...)
+	for _, extra := range r.URL.Query()["host"] {
+		host := strings.TrimSpace(extra)
+		if host == "" || !validDomainName(host) || slices.Contains(candidates, host) {
+			continue
+		}
+		candidates = append(candidates, host)
+	}
+
 	client, err := h.Config.sshConnect(node)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "ssh connect failed: "+err.Error())
@@ -69,13 +81,13 @@ func (h *NodeOpsHandler) HandleRealityTargets(w http.ResponseWriter, r *http.Req
 	}
 	defer client.Close()
 
-	out, runErr := sshRun(client, realityProbeScript())
+	out, runErr := sshRun(client, realityProbeScriptFor(candidates...))
 	if runErr != nil && strings.TrimSpace(out) == "" {
 		writeError(w, http.StatusBadGateway, "probe failed: "+runErr.Error())
 		return
 	}
 
-	rows := probeAllRealityTargets(out)
+	rows := probeAllRealityTargetsFor(out, candidates)
 	for i := range rows {
 		rows[i].Current = rows[i].Host == current
 	}
@@ -243,12 +255,16 @@ func realitySNIOf(inbound model.NodeInbound) string {
 // from the output is reported as a failure rather than silently dropped — that
 // absence is the whole point of asking.
 func probeAllRealityTargets(output string) []realityTargetProbe {
-	allowed := make(map[string]bool, len(realitySNIs))
-	for _, host := range realitySNIs {
+	return probeAllRealityTargetsFor(output, realitySNIs)
+}
+
+func probeAllRealityTargetsFor(output string, candidates []string) []realityTargetProbe {
+	allowed := make(map[string]bool, len(candidates))
+	for _, host := range candidates {
 		allowed[host] = true
 	}
-	rows := make([]realityTargetProbe, 0, len(realitySNIs))
-	seen := make(map[string]bool, len(realitySNIs))
+	rows := make([]realityTargetProbe, 0, len(candidates))
+	seen := make(map[string]bool, len(candidates))
 	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 4 || !allowed[fields[0]] || seen[fields[0]] {
@@ -268,7 +284,7 @@ func probeAllRealityTargets(output string) []realityTargetProbe {
 		}
 		rows = append(rows, row)
 	}
-	for _, host := range realitySNIs {
+	for _, host := range candidates {
 		if !seen[host] {
 			rows = append(rows, realityTargetProbe{
 				Host: host, Qualifies: false,
