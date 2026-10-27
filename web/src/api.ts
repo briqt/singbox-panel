@@ -304,7 +304,7 @@ export const api = {
     request<{ assessment?: SetupAssessment; error?: string } & Partial<SetupAssessment>>(
       `/api/nodes/${id}/setup-assessment?mode=${encodeURIComponent(mode)}&domain=${encodeURIComponent(domain)}`,
     ),
-  autoSetup: (id: number, body: { domain: string; mode: string; protocols?: string[]; hysteria2_profile?: string }) =>
+  autoSetup: (id: number, body: { domain: string; mode: string; protocols?: string[]; hysteria2_profile?: string; reality_sni?: string }) =>
     request<{ inbounds?: { protocol: string; status: string }[] }>(
       `/api/nodes/${id}/auto-setup`,
       send('POST', body),

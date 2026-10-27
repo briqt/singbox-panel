@@ -28,6 +28,7 @@ func TestAutoSetupRejectsInvalidRequestsBeforeSSH(t *testing.T) {
 		{name: "domain protocol without domain", body: map[string]any{"protocols": []string{"hysteria2"}}},
 		{name: "unsupported protocol", body: map[string]any{"protocols": []string{"trojan"}}},
 		{name: "unsupported profile", body: map[string]any{"hysteria2_profile": "mimic"}},
+		{name: "invalid Reality target", body: map[string]any{"reality_sni": "example.com;id"}},
 		{name: "invalid port", body: map[string]any{"protocols": []string{"vless-reality"}, "ports": map[string]any{"reality": 70000}}},
 	}
 	for _, tt := range tests {

@@ -30,6 +30,7 @@ type AutoSetupReq struct {
 	Protocols []string `json:"protocols"`
 	// Empty preserves the stored profile; new nodes use ordinary QUIC.
 	Hysteria2Profile string `json:"hysteria2_profile"`
+	RealitySNI       string `json:"reality_sni"`
 	Ports            struct {
 		Hysteria2   int `json:"hysteria2"`
 		Reality     int `json:"reality"`
@@ -74,6 +75,10 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Hysteria2Profile != "" && req.Hysteria2Profile != "quic" && req.Hysteria2Profile != "salamander" {
 		writeError(w, http.StatusBadRequest, "hysteria2_profile must be quic or salamander")
+		return
+	}
+	if req.RealitySNI != "" && !validDomainName(req.RealitySNI) {
+		writeError(w, http.StatusBadRequest, "reality_sni must be a domain name")
 		return
 	}
 
@@ -325,15 +330,11 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 			// Re-probe only when the stored target no longer behaves like the
 			// site it impersonates. Rotating a healthy SNI on every run would
 			// invalidate live subscriptions for no gain.
-			sni := storedSNI
-			if sni == "" || !realityDestStillQualifies(runner, sni) {
-				probed, probeErr := selectRealitySNI(runner)
-				if probeErr != nil {
-					results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: probeErr.Error()})
-					hadError = true
-					continue
-				}
-				sni = probed
+			sni, probeErr := chooseRealitySNI(runner, storedSNI, req.RealitySNI)
+			if probeErr != nil {
+				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: probeErr.Error()})
+				hadError = true
+				continue
 			}
 			server := node.Host
 			if domain != "" {
@@ -634,6 +635,30 @@ func randomHex(bytes int) string {
 }
 
 type commandRunner func(command string) (string, error)
+
+// Node-side TLS probing cannot establish client-side reachability: a target
+// may work from LA while its SNI gets reset on the user's network. An explicit
+// target lets an operator apply an end-to-end-tested choice through setup,
+// preserving the existing Reality identity. It still has to pass the TLS gate.
+func chooseRealitySNI(run commandRunner, stored, requested string) (string, error) {
+	if requested != "" {
+		if !validDomainName(requested) {
+			return "", fmt.Errorf("invalid Reality target domain")
+		}
+		out, err := run(realityProbeScriptFor(requested))
+		if err != nil {
+			return "", fmt.Errorf("explicit Reality target probe failed: %w", err)
+		}
+		if host, _ := parseRealityProbe(out, map[string]bool{requested: true}); host != requested {
+			return "", fmt.Errorf("explicit Reality target must serve HTTP/2 over TLS 1.3 with a non-error status")
+		}
+		return requested, nil
+	}
+	if stored != "" && realityDestStillQualifies(run, stored) {
+		return stored, nil
+	}
+	return selectRealitySNI(run)
+}
 
 func selectRealitySNI(run commandRunner) (string, error) {
 	out, err := run(realityProbeScript())

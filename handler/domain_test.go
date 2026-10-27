@@ -1,8 +1,28 @@
 package handler
 
 import (
+	"errors"
 	"testing"
 )
+
+func TestExplicitRealityTargetMustPassProbe(t *testing.T) {
+	for _, tc := range []struct {
+		output string
+		err    error
+		valid  bool
+	}{
+		{"www.mozilla.org 2 200 0.08\n", nil, true},
+		{"www.mozilla.org 1.1 200 0.08\n", nil, false},
+		{"www.mozilla.org 2 403 0.08\n", nil, false},
+		{"www.samsung.com 2 200 0.08\n", nil, false},
+		{"", errors.New("probe failed"), false},
+	} {
+		host, err := chooseRealitySNI(func(string) (string, error) { return tc.output, tc.err }, "www.samsung.com", "www.mozilla.org")
+		if (err == nil) != tc.valid || (tc.valid && host != "www.mozilla.org") {
+			t.Fatalf("output=%q host=%q err=%v", tc.output, host, err)
+		}
+	}
+}
 
 func TestHysteriaSettingsPreserveIdentityAndApplyExplicitProfile(t *testing.T) {
 	old := map[string]any{"obfs_password": "unchanged", "profile": "salamander"}

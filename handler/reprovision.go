@@ -55,6 +55,7 @@ type ReprovisionReq struct {
 	Upgrade          bool   `json:"upgrade"`
 	Version          string `json:"version"`
 	Hysteria2Profile string `json:"hysteria2_profile"`
+	RealitySNI       string `json:"reality_sni"`
 }
 
 func (h *ReprovisionHandler) HandleReprovision(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +79,10 @@ func (h *ReprovisionHandler) HandleReprovision(w http.ResponseWriter, r *http.Re
 	}
 	if req.Hysteria2Profile != "" && req.Hysteria2Profile != "quic" && req.Hysteria2Profile != "salamander" {
 		writeError(w, http.StatusBadRequest, "hysteria2_profile must be quic or salamander")
+		return
+	}
+	if req.RealitySNI != "" && !validDomainName(req.RealitySNI) {
+		writeError(w, http.StatusBadRequest, "reality_sni must be a domain name")
 		return
 	}
 	if req.Version == "" || req.Version == "recommended" {
@@ -109,6 +114,7 @@ func (h *ReprovisionHandler) HandleReprovision(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusOK, map[string]any{
 			"dry_run": true, "nodes": planned, "upgrade": req.Upgrade,
 			"version": req.Version, "hysteria2_profile": req.Hysteria2Profile,
+			"reality_sni": req.RealitySNI,
 		})
 		return
 	}
@@ -163,7 +169,7 @@ func (h *ReprovisionHandler) reprovisionNode(node model.Node, options Reprovisio
 		}
 	}
 
-	body, err := json.Marshal(AutoSetupReq{Domain: node.Domain, Mode: options.Mode, Hysteria2Profile: options.Hysteria2Profile})
+	body, err := json.Marshal(AutoSetupReq{Domain: node.Domain, Mode: options.Mode, Hysteria2Profile: options.Hysteria2Profile, RealitySNI: options.RealitySNI})
 	if err != nil {
 		result.Status = "failed"
 		result.Error = err.Error()

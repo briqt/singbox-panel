@@ -201,6 +201,7 @@ export function AutoSetupModal({
   const [domain, setDomain] = useState('')
   const [protocols, setProtocols] = useState<string[]>([])
   const [hy2Profile, setHy2Profile] = useState('')
+  const [realitySNI, setRealitySNI] = useState('')
   const [assessment, setAssessment] = useState<SetupAssessment | null>(null)
   const [assessError, setAssessError] = useState('')
   const [assessing, setAssessing] = useState(false)
@@ -212,6 +213,7 @@ export function AutoSetupModal({
   useEffect(() => {
     if (!node) return
     setDomain(node.domain ?? '')
+    setRealitySNI('')
     const hy2 = detail?.inbounds.find((inbound) => inbound.protocol === 'hysteria2')?.settings
     setHy2Profile(hy2?.profile ?? (hy2?.obfs_password ? 'salamander' : ''))
     setMode(
@@ -270,7 +272,7 @@ export function AutoSetupModal({
     }
     setRunning(true)
     try {
-      const result = await api.autoSetup(node.id, { domain, mode, protocols, hysteria2_profile: hy2Profile })
+      const result = await api.autoSetup(node.id, { domain, mode, protocols, hysteria2_profile: hy2Profile, reality_sni: realitySNI.trim() })
       const changed = (result.inbounds ?? []).filter(
         (inbound) => inbound.status === 'ok' || inbound.status === 'updated',
       ).length
@@ -352,6 +354,11 @@ export function AutoSetupModal({
               { value: 'quic', label: t('hy2Quic') },
               { value: 'salamander', label: t('hy2Salamander') },
             ]} />
+          </Form.Item>
+        )}
+        {protocols.includes('vless-reality') && (
+          <Form.Item label={t('realityTarget')} extra={t('realityTargetHint')}>
+            <Input value={realitySNI} onChange={(event) => setRealitySNI(event.target.value)} placeholder={t('realityTargetAuto')} />
           </Form.Item>
         )}
         <Form.Item label={t('protocols')} style={{ marginBottom: 0 }}>

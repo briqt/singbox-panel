@@ -134,6 +134,11 @@ CDN edge is the wrong answer: REALITY forwards a failed probe to this target, so
 a prober would see a big-site certificate on a server that speaks no h2 and
 refuses the root path — an inconsistency the real site never shows.
 
+A node-side probe cannot prove the client path works. If an otherwise qualified
+target resets on the client network, `reality_sni` in setup/reprovision can select
+an explicitly tested domain. It must still pass the TLS/HTTP probe and does not
+rotate Reality keys. Verify the actual tunnel after applying it.
+
 Repeat setup **re-evaluates** the stored handshake target and listen port rather
 than skipping an inbound because it exists, so later improvements reach nodes
 that were provisioned earlier. Reality credentials (keypair, short ID) and user

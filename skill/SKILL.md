@@ -49,6 +49,8 @@ POST /api/nodes/{id}/auto-setup
 # 可选 hysteria2_profile: "quic" / "salamander"。省略时保留原模式，新节点默认 quic。
 # quic 的 HTTP/3 页面内置在项目中，由 sing-box 直接返回，不另装网站服务。
 # 模式变化后客户端必须刷新订阅；Chrome QUIC 指纹由客户端内核实现，服务端开关不能代替。
+# 客户端 Reality 被重置、节点侧探测却成功时，可用 reality_sni 指定已实测目标。
+# 例如 {"protocols":["vless-reality"],"reality_sni":"www.mozilla.org"}；仍校验目标 TLS，保留原密钥。
 ```
 
 ### 用户管理
