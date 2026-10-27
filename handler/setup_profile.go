@@ -113,19 +113,27 @@ func recordsPointToNode(records []string, nodeHost string, lookup hostLookup) bo
 			nodeAddresses = resolved
 		}
 	}
+	if len(records) == 0 {
+		return false
+	}
 	for _, record := range records {
 		recordIP := net.ParseIP(record)
 		if recordIP == nil {
-			continue
+			return false
 		}
+		matched := false
 		for _, address := range nodeAddresses {
 			addressIP := net.ParseIP(address)
 			if addressIP != nil && recordIP.Equal(addressIP) {
-				return true
+				matched = true
+				break
 			}
 		}
+		if !matched {
+			return false
+		}
 	}
-	return false
+	return true
 }
 
 func uniqueStrings(values []string) []string {

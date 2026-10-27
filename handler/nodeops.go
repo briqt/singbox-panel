@@ -20,6 +20,12 @@ import (
 // per-user traffic accounting. Upstream SagerNet releases omit that tag.
 const singboxRepo = "briqt/sing-box"
 
+// Reviewed stable baseline. "latest" remains an explicit opt-in; ordinary
+// installs and fleet upgrades are reproducible against a reviewed version.
+const recommendedSingboxVersion = "1.14.4"
+
+var stableVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+
 type NodeOpsHandler struct {
 	Nodes  *model.NodeStore
 	Config *ConfigHandler
@@ -226,11 +232,24 @@ func (h *NodeOpsHandler) install(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req InstallReq
-	json.NewDecoder(r.Body).Decode(&req)
-	version := req.Version
-	if version == "" {
-		version = "latest"
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
 	}
+	version := req.Version
+	if version == "" || version == "recommended" {
+		version = recommendedSingboxVersion
+	}
+	version = strings.TrimPrefix(version, "v")
+	if version != "latest" && !stableVersionPattern.MatchString(version) {
+		writeError(w, http.StatusBadRequest, "version must be recommended, latest, or a stable x.y.z version")
+		return
+	}
+	nodeLock := h.Config.pushLock(nodeID)
+	nodeLock.Lock()
+	defer nodeLock.Unlock()
 
 	client, err := h.Config.sshConnect(node)
 	if err != nil {
@@ -239,10 +258,20 @@ func (h *NodeOpsHandler) install(w http.ResponseWriter, r *http.Request) {
 	}
 	defer client.Close()
 
-	arch := "amd64"
-	archOut, _ := sshRun(client, "uname -m")
-	if strings.Contains(archOut, "aarch64") || strings.Contains(archOut, "arm64") {
+	arch := ""
+	archOut, archErr := sshRun(client, "uname -m")
+	switch strings.TrimSpace(archOut) {
+	case "x86_64", "amd64":
+		arch = "amd64"
+	case "aarch64", "arm64":
 		arch = "arm64"
+	default:
+		writeError(w, http.StatusBadRequest, "unsupported or unreadable node architecture")
+		return
+	}
+	if archErr != nil {
+		writeError(w, http.StatusBadGateway, "failed to read node architecture")
+		return
 	}
 
 	// Resolve latest version if needed. Follow the releases/latest redirect
@@ -266,6 +295,10 @@ func (h *NodeOpsHandler) install(w http.ResponseWriter, r *http.Request) {
 	} else {
 		version = strings.TrimPrefix(version, "v")
 	}
+	if !stableVersionPattern.MatchString(version) {
+		writeError(w, http.StatusBadGateway, "release source did not return a stable version")
+		return
+	}
 
 	binPath := node.SingboxBin
 	if binPath == "" {
@@ -279,9 +312,9 @@ func (h *NodeOpsHandler) install(w http.ResponseWriter, r *http.Request) {
 	// Install with an atomic rename: cp-over-in-place fails with ETXTBSY
 	// ("text file busy") when sing-box is already running, so we stage the new
 	// binary beside the target and mv it into place. rename(2) swaps the
-	// directory entry while the running process keeps its old inode, so the
-	// upgrade takes effect on the next restart (the config push that follows).
-	out, err := sshRun(client, installBinaryScript(url, binPath))
+	// directory entry while the running process keeps its old inode. The
+	// installer restarts running services and checks which inode is serving.
+	out, err := sshRun(client, verifiedInstallScript(url, binPath, node.ConfigPath, version))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "install failed: "+strings.TrimSpace(out))
 		return
@@ -390,26 +423,4 @@ func (h *NodeOpsHandler) setupSSH(w http.ResponseWriter, r *http.Request) {
 	verifyClient.Close()
 
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "node": node.Name, "message": "SSH key auth configured successfully"})
-}
-
-// installBinaryScript stages the unpacked binary next to the target and
-// renames it into place. mkdir -p is load-bearing: a clean machine does not
-// have the parent directory, and `install` will not create it (that is how
-// laxcc first failed — default path was still the old v2ray-agent tree).
-func installBinaryScript(url, binPath string) string {
-	return fmt.Sprintf(`
-set -e
-cd /tmp
-rm -rf sing-box-install
-mkdir sing-box-install && cd sing-box-install
-curl -sL "%s" -o sb.tar.gz
-tar xzf sb.tar.gz
-BIN=$(find . -name "sing-box" -type f | head -1)
-[ -n "$BIN" ] || { echo "sing-box binary not found in archive"; exit 1; }
-mkdir -p "$(dirname "%s")"
-install -m 0755 "$BIN" "%s.new"
-mv -f "%s.new" "%s"
-rm -rf /tmp/sing-box-install
-"%s" version
-`, url, binPath, binPath, binPath, binPath, binPath)
 }

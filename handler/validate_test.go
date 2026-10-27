@@ -8,7 +8,7 @@ func TestValidDomainName(t *testing.T) {
 			t.Fatalf("valid domain rejected: %q", domain)
 		}
 	}
-	for _, domain := range []string{"", "localhost", ".example.com", "example.com.", "-bad.example", "bad-.example", "bad;touch-x.example"} {
+	for _, domain := range []string{"", "203.0.113.1", "localhost", ".example.com", "example.com.", "-bad.example", "bad-.example", "bad;touch-x.example"} {
 		if validDomainName(domain) {
 			t.Fatalf("invalid domain accepted: %q", domain)
 		}

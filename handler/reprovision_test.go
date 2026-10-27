@@ -117,6 +117,30 @@ func TestReprovisionRejectsUnknownMode(t *testing.T) {
 	}
 }
 
+func TestReprovisionUpgradeFailureStopsSetup(t *testing.T) {
+	h, env := reprovisionEnv(t)
+	env.createNode(t, "node-a")
+	h.Setup.Ops = &NodeOpsHandler{Nodes: env.nodes, Config: &ConfigHandler{}}
+	rec := performJSONRequest(t, http.HandlerFunc(h.HandleReprovision), http.MethodPost, "/api/batch/reprovision", map[string]any{"upgrade": true, "version": "1.14.4"})
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	out := decodeReprovision(t, rec.Body.Bytes())
+	first := out["nodes"].([]any)[0].(map[string]any)
+	if first["install"] == nil || first["response"] != nil || first["status"] != "failed" {
+		t.Fatalf("setup followed failed upgrade: %v", first)
+	}
+}
+
+func TestReprovisionRejectsUnpinnedUpgrade(t *testing.T) {
+	h, env := reprovisionEnv(t)
+	env.createNode(t, "node-a")
+	rec := performJSONRequest(t, http.HandlerFunc(h.HandleReprovision), http.MethodPost, "/api/batch/reprovision", map[string]any{"upgrade": true, "version": "latest", "dry_run": true})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestReprovisionRejectsNonPost(t *testing.T) {
 	handler, _ := reprovisionEnv(t)
 	rec := performJSONRequest(t, http.HandlerFunc(handler.HandleReprovision),

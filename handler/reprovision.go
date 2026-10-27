@@ -39,6 +39,7 @@ type NodeReprovisionResult struct {
 	Status   string          `json:"status"`
 	HTTPCode int             `json:"http_code"`
 	Response json.RawMessage `json:"response,omitempty"`
+	Install  json.RawMessage `json:"install,omitempty"`
 	Error    string          `json:"error,omitempty"`
 }
 
@@ -50,7 +51,10 @@ type ReprovisionReq struct {
 	NodeIDs []int `json:"node_ids"`
 	// DryRun reports which nodes would be re-provisioned and stops. Rolling a
 	// change across every node is the kind of operation worth previewing.
-	DryRun bool `json:"dry_run"`
+	DryRun           bool   `json:"dry_run"`
+	Upgrade          bool   `json:"upgrade"`
+	Version          string `json:"version"`
+	Hysteria2Profile string `json:"hysteria2_profile"`
 }
 
 func (h *ReprovisionHandler) HandleReprovision(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +76,17 @@ func (h *ReprovisionHandler) HandleReprovision(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "unsupported mode: "+req.Mode)
 		return
 	}
+	if req.Hysteria2Profile != "" && req.Hysteria2Profile != "quic" && req.Hysteria2Profile != "salamander" {
+		writeError(w, http.StatusBadRequest, "hysteria2_profile must be quic or salamander")
+		return
+	}
+	if req.Version == "" || req.Version == "recommended" {
+		req.Version = recommendedSingboxVersion
+	}
+	if !stableVersionPattern.MatchString(req.Version) {
+		writeError(w, http.StatusBadRequest, "batch upgrades require a pinned stable x.y.z version")
+		return
+	}
 
 	nodes, err := h.Nodes.ListEnabled()
 	if err != nil {
@@ -91,7 +106,10 @@ func (h *ReprovisionHandler) HandleReprovision(w http.ResponseWriter, r *http.Re
 				"node_id": node.ID, "node": node.Name, "domain": node.Domain,
 			})
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"dry_run": true, "nodes": planned})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"dry_run": true, "nodes": planned, "upgrade": req.Upgrade,
+			"version": req.Version, "hysteria2_profile": req.Hysteria2Profile,
+		})
 		return
 	}
 
@@ -103,7 +121,7 @@ func (h *ReprovisionHandler) HandleReprovision(w http.ResponseWriter, r *http.Re
 	results := make([]NodeReprovisionResult, 0, len(targets))
 	okCount := 0
 	for _, node := range targets {
-		result := h.reprovisionNode(node, req.Mode)
+		result := h.reprovisionNode(node, req)
 		if result.Status == "ok" {
 			okCount++
 		}
@@ -126,10 +144,26 @@ func (h *ReprovisionHandler) HandleReprovision(w http.ResponseWriter, r *http.Re
 
 // reprovisionNode drives the real auto-setup handler and captures its response,
 // so there is exactly one implementation of what re-provisioning means.
-func (h *ReprovisionHandler) reprovisionNode(node model.Node, mode string) NodeReprovisionResult {
+func (h *ReprovisionHandler) reprovisionNode(node model.Node, options ReprovisionReq) NodeReprovisionResult {
 	result := NodeReprovisionResult{NodeID: node.ID, Node: node.Name}
+	if options.Upgrade {
+		if h.Setup.Ops == nil {
+			result.Status, result.Error = "failed", "node installer unavailable"
+			return result
+		}
+		installBody, _ := json.Marshal(InstallReq{Version: options.Version})
+		installReq := httptest.NewRequest(http.MethodPost, "/api/nodes/"+strconv.Itoa(node.ID)+"/install", bytes.NewReader(installBody))
+		installRec := httptest.NewRecorder()
+		h.Setup.Ops.install(installRec, installReq)
+		result.Install = append(json.RawMessage(nil), installRec.Body.Bytes()...)
+		if installRec.Code < 200 || installRec.Code >= 300 {
+			result.HTTPCode, result.Status = installRec.Code, "failed"
+			result.Error = "upgrade failed; setup was not attempted"
+			return result
+		}
+	}
 
-	body, err := json.Marshal(AutoSetupReq{Domain: node.Domain, Mode: mode})
+	body, err := json.Marshal(AutoSetupReq{Domain: node.Domain, Mode: options.Mode, Hysteria2Profile: options.Hysteria2Profile})
 	if err != nil {
 		result.Status = "failed"
 		result.Error = err.Error()

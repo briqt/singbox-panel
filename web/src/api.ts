@@ -49,6 +49,7 @@ export interface Inbound {
   port: number
   enabled: boolean
   sort_order: number
+  settings?: { profile?: string; obfs_password?: string }
 }
 
 export interface NodeDetail extends Node {
@@ -298,12 +299,12 @@ export const api = {
   setupSSH: (id: number, password: string) =>
     request<{ status: string }>(`/api/nodes/${id}/setup-ssh`, send('POST', { password })),
   install: (id: number) =>
-    request<{ version: string }>(`/api/nodes/${id}/install`, send('POST', { version: 'latest' })),
+    request<{ version: string }>(`/api/nodes/${id}/install`, send('POST', { version: 'recommended' })),
   setupAssessment: (id: number, mode: string, domain: string) =>
     request<{ assessment?: SetupAssessment; error?: string } & Partial<SetupAssessment>>(
       `/api/nodes/${id}/setup-assessment?mode=${encodeURIComponent(mode)}&domain=${encodeURIComponent(domain)}`,
     ),
-  autoSetup: (id: number, body: { domain: string; mode: string; protocols?: string[] }) =>
+  autoSetup: (id: number, body: { domain: string; mode: string; protocols?: string[]; hysteria2_profile?: string }) =>
     request<{ inbounds?: { protocol: string; status: string }[] }>(
       `/api/nodes/${id}/auto-setup`,
       send('POST', body),

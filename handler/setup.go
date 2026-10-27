@@ -9,11 +9,13 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/briqt/singbox-panel/model"
+	"github.com/briqt/singbox-panel/singbox"
 )
 
 type SetupHandler struct {
@@ -26,7 +28,9 @@ type AutoSetupReq struct {
 	Domain    string   `json:"domain"`
 	Mode      string   `json:"mode"`
 	Protocols []string `json:"protocols"`
-	Ports     struct {
+	// Empty preserves the stored profile; new nodes use ordinary QUIC.
+	Hysteria2Profile string `json:"hysteria2_profile"`
+	Ports            struct {
 		Hysteria2   int `json:"hysteria2"`
 		Reality     int `json:"reality"`
 		HTTPUpgrade int `json:"httpupgrade"`
@@ -66,6 +70,10 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 	var req AutoSetupReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if req.Hysteria2Profile != "" && req.Hysteria2Profile != "quic" && req.Hysteria2Profile != "salamander" {
+		writeError(w, http.StatusBadRequest, "hysteria2_profile must be quic or salamander")
 		return
 	}
 
@@ -201,23 +209,10 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 				json.Unmarshal(existing.Settings, &oldSettings)
 				currentPort = existing.Port
 			}
-			// The obfuscator password is a credential clients must carry, so it
-			// is generated once and preserved across runs like the Reality keys.
-			obfsPassword, _ := oldSettings["obfs_password"].(string)
-			if obfsPassword == "" {
-				obfsPassword = randomHex(16)
-			}
+			settings := hysteriaSettings(oldSettings, req.Hysteria2Profile, domain)
 			desiredPort := req.Ports.Hysteria2
 			if desiredPort == 0 {
 				desiredPort = selectListenPort(runner, "udp", currentPort, reservedPorts["udp"])
-			}
-			if exists {
-				oldDomain, _ := oldSettings["domain"].(string)
-				_, hadObfs := oldSettings["obfs_password"].(string)
-				if oldDomain == domain && desiredPort == existing.Port && hadObfs {
-					results = append(results, inboundResult{Protocol: proto, Port: existing.Port, Status: "skipped", Details: "already configured"})
-					continue
-				}
 			}
 			ips, dnsErr := net.LookupHost(domain)
 			if dnsErr != nil {
@@ -225,13 +220,7 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 				hadError = true
 				continue
 			}
-			dnsOK := false
-			for _, ip := range ips {
-				if ip == node.Host {
-					dnsOK = true
-				}
-			}
-			if !dnsOK {
+			if !recordsPointToNode(ips, node.Host, net.LookupHost) {
 				results = append(results, inboundResult{Protocol: proto, Status: "error", Details: fmt.Sprintf("DNS: %s → %v, expected %s", domain, ips, node.Host)})
 				hadError = true
 				continue
@@ -262,11 +251,13 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 				hadError = true
 				continue
 			}
-			settings := mustMarshal(map[string]any{
-				"domain": domain, "cert_path": certPath, "key_path": keyPath,
-				"obfs_password": obfsPassword,
-			})
-			inboundReq := model.CreateInboundReq{Tag: "hysteria2", Protocol: "hysteria2", Port: port, Settings: settings}
+			// Certificate and renewal machinery were verified even on an
+			// unchanged setup; existence of an inbound is not proof of health.
+			inboundReq := model.CreateInboundReq{Tag: "hysteria2", Protocol: "hysteria2", Port: port, Settings: mustMarshal(settings)}
+			if exists && port == existing.Port && reflect.DeepEqual(oldSettings, settings) {
+				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "skipped", Details: "configuration unchanged; certificate checked"})
+				continue
+			}
 			status := "ok"
 			if exists {
 				updatedInbounds = append(updatedInbounds, existing)
@@ -344,7 +335,14 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 				}
 				sni = probed
 			}
-			if exists && port == currentPort && sni == storedSNI {
+			server := node.Host
+			if domain != "" {
+				if ips, err := net.LookupHost(domain); err == nil && recordsPointToNode(ips, node.Host, net.LookupHost) {
+					server = domain
+				}
+			}
+			storedServer, _ := oldSettings["server"].(string)
+			if exists && port == currentPort && sni == storedSNI && server == storedServer {
 				results = append(results, inboundResult{Protocol: proto, Port: existing.Port, Status: "skipped", Details: "already configured"})
 				continue
 			}
@@ -352,6 +350,7 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 				"sni": sni, "private_key": privateKey, "public_key": publicKey,
 				"short_id": shortID, "handshake_server": sni, "handshake_port": 443,
 				"fingerprint": "chrome",
+				"server":      server,
 			})
 			inboundReq := model.CreateInboundReq{Tag: "vless-reality", Protocol: "vless-reality", Port: port, Settings: settings}
 			status := "ok"
@@ -505,6 +504,27 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 		"inbounds": results, "push": "ok", "sync": syncResults, "node": node.Name,
 		"assessment": assessment, "kernel_tuning": tuning,
 	})
+}
+
+func hysteriaSettings(old map[string]any, requested, domain string) map[string]any {
+	settings := make(map[string]any, len(old)+4)
+	for key, value := range old {
+		settings[key] = value
+	}
+	profile := requested
+	if profile == "" {
+		profile = singbox.HysteriaProfile(old)
+	}
+	settings["profile"] = profile
+	settings["domain"] = domain
+	settings["cert_path"] = "/etc/sing-box/tls/" + domain + ".crt"
+	settings["key_path"] = "/etc/sing-box/tls/" + domain + ".key"
+	// Retain a dormant password when switching to QUIC so switching back does
+	// not needlessly rotate credentials. Generators consult the profile first.
+	if password, _ := settings["obfs_password"].(string); profile == "salamander" && password == "" {
+		settings["obfs_password"] = randomHex(16)
+	}
+	return settings
 }
 
 func randomPort() int {

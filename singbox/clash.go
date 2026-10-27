@@ -100,7 +100,7 @@ func clashHysteria2(user model.User, node model.Node, ib model.NodeInbound, s ma
 		return ""
 	}
 	obfs := ""
-	if obfsPassword, _ := s["obfs_password"].(string); obfsPassword != "" {
+	if obfsPassword := hysteriaObfsPassword(s); obfsPassword != "" {
 		obfs = fmt.Sprintf("\n    obfs: salamander\n    obfs-password: %s", obfsPassword)
 	}
 	return fmt.Sprintf(`  - name: "%s"
@@ -110,7 +110,7 @@ func clashHysteria2(user model.User, node model.Node, ib model.NodeInbound, s ma
     password: %s
     sni: %s%s
     alpn:
-      - h3`, name, node.Host, ib.Port, user.UUID, domain, obfs)
+      - h3`, name, domain, ib.Port, user.UUID, domain, obfs)
 }
 
 func clashReality(user model.User, node model.Node, ib model.NodeInbound, s map[string]any, name string) string {
@@ -137,7 +137,7 @@ func clashReality(user model.User, node model.Node, ib model.NodeInbound, s map[
     reality-opts:
       public-key: %s
       short-id: %s
-    network: tcp`, name, node.Host, ib.Port, user.UUID, sni, fp, publicKey, shortID)
+    network: tcp`, name, realityServer(node.Host, s), ib.Port, user.UUID, sni, fp, publicKey, shortID)
 }
 
 func clashHTTPUpgrade(user model.User, node model.Node, ib model.NodeInbound, s map[string]any, name string) string {

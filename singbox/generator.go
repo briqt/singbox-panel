@@ -139,11 +139,14 @@ func buildHysteria2Inbound(users []model.User, ib model.NodeInbound, s map[strin
 	// handshake on a fixed port is the pattern carrier UDP QoS matches on.
 	// Enabling it means the port is no longer a valid HTTP/3 endpoint, which is
 	// why there is no masquerade fallback to pair with it.
-	if obfsPassword, _ := s["obfs_password"].(string); obfsPassword != "" {
+	if obfsPassword := hysteriaObfsPassword(s); obfsPassword != "" {
 		inbound["obfs"] = map[string]any{
 			"type":     "salamander",
 			"password": obfsPassword,
 		}
+	} else {
+		// Served by sing-box itself: no web server, process or runtime dependency.
+		inbound["masquerade"] = builtinMasquerade()
 	}
 	return inbound
 }
@@ -275,11 +278,11 @@ func buildHysteria2URI(user model.User, node model.Node, ib model.NodeInbound, s
 	}
 	name := names.next(node.Name + "-Hy2")
 	obfs := ""
-	if obfsPassword, _ := s["obfs_password"].(string); obfsPassword != "" {
+	if obfsPassword := hysteriaObfsPassword(s); obfsPassword != "" {
 		obfs = "&obfs=salamander&obfs-password=" + url.QueryEscape(obfsPassword)
 	}
 	return fmt.Sprintf("hysteria2://%s@%s:%d?sni=%s&alpn=h3%s#%s",
-		user.UUID, hostForURI(node.Host), ib.Port, domain, obfs, name)
+		user.UUID, hostForURI(domain), ib.Port, domain, obfs, url.PathEscape(name))
 }
 
 func buildRealityURI(user model.User, node model.Node, ib model.NodeInbound, s map[string]any, names protocolNameTracker) string {
@@ -295,7 +298,7 @@ func buildRealityURI(user model.User, node model.Node, ib model.NodeInbound, s m
 	}
 	name := names.next(node.Name + "-Reality")
 	return fmt.Sprintf("vless://%s@%s:%d?encryption=none&security=reality&sni=%s&pbk=%s&sid=%s&fp=%s&flow=xtls-rprx-vision&type=tcp#%s",
-		user.UUID, hostForURI(node.Host), ib.Port, sni, publicKey, shortID, fp, name)
+		user.UUID, hostForURI(realityServer(node.Host, s)), ib.Port, sni, publicKey, shortID, fp, url.PathEscape(name))
 }
 
 func buildHTTPUpgradeURI(user model.User, node model.Node, ib model.NodeInbound, s map[string]any, names protocolNameTracker) string {

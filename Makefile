@@ -44,6 +44,7 @@ build-stamped:
 test:
 	go test ./...
 	cd web && corepack pnpm lint
+	python3 -m unittest discover -s scripts -p 'test_*.py'
 
 # 目标面板机：ssh 主机别名或 user@host，按需覆盖 `make deploy DEPLOY_HOST=myhost`
 DEPLOY_HOST ?= singbox-panel-host

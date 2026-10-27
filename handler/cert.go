@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -81,7 +82,7 @@ func certTargetsFor(inbounds []model.NodeInbound) []certTarget {
 // per node page load, so this must not cost one SSH exec per inbound.
 func readCertStatuses(client *ssh.Client, targets []certTarget, now time.Time) map[int]*CertStatus {
 	result := make(map[int]*CertStatus, len(targets))
-	var paths []string
+	var checks []certTarget
 	for _, target := range targets {
 		status := &CertStatus{Domain: target.Domain, Path: target.CertPath}
 		result[target.InboundID] = status
@@ -89,17 +90,18 @@ func readCertStatuses(client *ssh.Client, targets []certTarget, now time.Time) m
 			status.Error = "no cert_path in inbound settings"
 			continue
 		}
-		paths = append(paths, target.CertPath)
+		checks = append(checks, target)
 	}
-	if len(paths) == 0 {
+	if len(checks) == 0 {
 		return result
 	}
 
 	var b strings.Builder
-	for _, path := range paths {
-		// One line per cert: "<path>\t<notAfter or empty>". Missing or corrupt
-		// files still emit their line so they are reported, not dropped.
-		fmt.Fprintf(&b, "printf '%%s\\t' %q; openssl x509 -in %q -noout -enddate 2>/dev/null | sed 's/^notAfter=//'; echo;\n", path, path)
+	for _, target := range checks {
+		// Key by inbound ID: two inbounds may share a certificate but point
+		// at different private keys. Each pairing needs its own result.
+		fmt.Fprintf(&b, "printf '%%s\\t' %s; if %s; then openssl x509 -in %s -noout -enddate 2>/dev/null | sed 's/^notAfter=//'; else echo INVALID_MATERIAL; fi;\n",
+			shellQuote(strconv.Itoa(target.InboundID)), certMaterialCheck(target.Domain, target.CertPath, target.KeyPath), shellQuote(target.CertPath))
 	}
 	out, err := sshRun(client, b.String())
 	if err != nil && strings.TrimSpace(out) == "" {
@@ -111,11 +113,11 @@ func readCertStatuses(client *ssh.Client, targets []certTarget, now time.Time) m
 		return result
 	}
 
-	byPath := map[string]string{}
+	byID := map[string]string{}
 	for _, line := range strings.Split(out, "\n") {
-		path, value, ok := strings.Cut(strings.TrimRight(line, "\r"), "\t")
+		id, value, ok := strings.Cut(strings.TrimRight(line, "\r"), "\t")
 		if ok {
-			byPath[path] = strings.TrimSpace(value)
+			byID[id] = strings.TrimSpace(value)
 		}
 	}
 	for _, target := range targets {
@@ -123,7 +125,11 @@ func readCertStatuses(client *ssh.Client, targets []certTarget, now time.Time) m
 		if status.Error != "" || target.CertPath == "" {
 			continue
 		}
-		raw, seen := byPath[target.CertPath]
+		raw, seen := byID[strconv.Itoa(target.InboundID)]
+		if raw == "INVALID_MATERIAL" {
+			status.Error = "certificate unreadable, hostname mismatch, or private key mismatch"
+			continue
+		}
 		if !seen || raw == "" {
 			status.Error = "certificate missing or unreadable"
 			status.Expired = true
@@ -139,6 +145,10 @@ func readCertStatuses(client *ssh.Client, targets []certTarget, now time.Time) m
 		status.Expired = !notAfter.After(now)
 	}
 	return result
+}
+
+func certMaterialCheck(domain, cert, key string) string {
+	return fmt.Sprintf(`(openssl x509 -in %s -noout -checkhost %s >/dev/null 2>&1 && cert_pub=$(openssl x509 -in %s -noout -pubkey 2>/dev/null) && key_pub=$(openssl pkey -in %s -pubout 2>/dev/null) && [ -n "$cert_pub" ] && [ "$cert_pub" = "$key_pub" ])`, shellQuote(cert), shellQuote(domain), shellQuote(cert), shellQuote(key))
 }
 
 // parseCertNotAfter reads openssl's -enddate format. openssl space-pads
@@ -195,7 +205,7 @@ harden_acme() {
 harden_acme
 
 if [ "$FORCE" != "1" ] && [ -f "$CERT" ] && [ -f "$KEY" ] &&
-   openssl x509 -in "$CERT" -noout -checkend $((MINDAYS * 86400)) >/dev/null 2>&1; then
+   openssl x509 -in "$CERT" -noout -checkend $((MINDAYS * 86400)) >/dev/null 2>&1 && %s; then
   echo "CERT_FRESH"; exit 0
 fi
 
@@ -233,7 +243,7 @@ fi
 "$ACME" --install-cert -d "$DOMAIN" --ecc --fullchain-file "$CERT" --key-file "$KEY" \
   --reloadcmd "systemctl restart sing-box 2>/dev/null || true" 2>&1
 echo "ACME_DONE"
-`, domain, certPath, keyPath, forceFlag, minDays)
+`, domain, certPath, keyPath, forceFlag, minDays, certMaterialCheck(domain, certPath, keyPath))
 }
 
 type CertRenewReq struct {
@@ -386,12 +396,7 @@ func certNeedsIssuing(before *CertStatus, force bool) bool {
 }
 
 func containsHost(ips []string, host string) bool {
-	for _, ip := range ips {
-		if ip == host {
-			return true
-		}
-	}
-	return false
+	return recordsPointToNode(ips, host, net.LookupHost)
 }
 
 func firstNonEmpty(values ...string) string {

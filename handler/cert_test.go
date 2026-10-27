@@ -30,6 +30,7 @@ func writeTestCert(t *testing.T, dir, name string, notAfter time.Time) (string, 
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: name},
+		DNSNames:     []string{"example.test", name},
 		NotBefore:    notAfter.Add(-90 * 24 * time.Hour),
 		NotAfter:     notAfter,
 	}
@@ -43,7 +44,11 @@ func writeTestCert(t *testing.T, dir, name string, notAfter time.Time) (string, 
 	if err := os.WriteFile(certPath, certPEM, 0o644); err != nil {
 		t.Fatalf("write cert: %v", err)
 	}
-	if err := os.WriteFile(keyPath, []byte("key"), 0o600); err != nil {
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
 		t.Fatalf("write key: %v", err)
 	}
 	return certPath, keyPath
@@ -108,6 +113,28 @@ func TestRenewGateSkipsHealthyCert(t *testing.T) {
 	out := runRenewScript(t, certPath, keyPath, false)
 	if !strings.Contains(out, "CERT_FRESH") {
 		t.Fatalf("healthy certificate should be left alone, got:\n%s", out)
+	}
+}
+
+func TestCertificateMaterialRejectsWrongHostnameAndKey(t *testing.T) {
+	dir := t.TempDir()
+	cert, key := writeTestCert(t, dir, "node.example.com", time.Now().Add(80*24*time.Hour))
+	_, otherKey := writeTestCert(t, dir, "other.example.com", time.Now().Add(80*24*time.Hour))
+	for _, tc := range []struct {
+		domain, key string
+		valid       bool
+	}{
+		{"node.example.com", key, true}, {"wrong.example.com", key, false}, {"node.example.com", otherKey, false},
+	} {
+		out, err := exec.Command("sh", "-c", certMaterialCheck(tc.domain, cert, tc.key)).CombinedOutput()
+		if (err == nil) != tc.valid {
+			t.Fatalf("domain=%s key=%s valid=%v err=%v output=%s", tc.domain, tc.key, tc.valid, err, out)
+		}
+		certPEM, _ := os.ReadFile(cert)
+		keyPEM, _ := os.ReadFile(tc.key)
+		if err := validateCertificate(tc.domain, certPEM, keyPEM, time.Now()); (err == nil) != tc.valid {
+			t.Fatalf("upload validation: domain=%s err=%v", tc.domain, err)
+		}
 	}
 }
 

@@ -73,7 +73,7 @@ export function CreateNodeModal({
           <Input autoFocus />
         </Form.Item>
         <Form.Item name="host" label={t('host')} rules={[{ required: true }]}>
-          <Input placeholder="1.2.3.4" />
+          <Input placeholder="ssh.example.com" />
         </Form.Item>
         <Form.Item name="domain" label={t('domain')} extra={t('domainOptional')}>
           <Input />
@@ -200,6 +200,7 @@ export function AutoSetupModal({
   const [mode, setMode] = useState('auto')
   const [domain, setDomain] = useState('')
   const [protocols, setProtocols] = useState<string[]>([])
+  const [hy2Profile, setHy2Profile] = useState('')
   const [assessment, setAssessment] = useState<SetupAssessment | null>(null)
   const [assessError, setAssessError] = useState('')
   const [assessing, setAssessing] = useState(false)
@@ -211,6 +212,8 @@ export function AutoSetupModal({
   useEffect(() => {
     if (!node) return
     setDomain(node.domain ?? '')
+    const hy2 = detail?.inbounds.find((inbound) => inbound.protocol === 'hysteria2')?.settings
+    setHy2Profile(hy2?.profile ?? (hy2?.obfs_password ? 'salamander' : ''))
     setMode(
       existing.includes('vless-httpupgrade')
         ? 'cdn'
@@ -267,7 +270,7 @@ export function AutoSetupModal({
     }
     setRunning(true)
     try {
-      const result = await api.autoSetup(node.id, { domain, mode, protocols })
+      const result = await api.autoSetup(node.id, { domain, mode, protocols, hysteria2_profile: hy2Profile })
       const changed = (result.inbounds ?? []).filter(
         (inbound) => inbound.status === 'ok' || inbound.status === 'updated',
       ).length
@@ -341,6 +344,15 @@ export function AutoSetupModal({
               ) : undefined
             }
           />
+        )}
+        {protocols.includes('hysteria2') && (
+          <Form.Item label={t('hy2Profile')} extra={t('hy2ProfileHint')}>
+            <Select value={hy2Profile} onChange={setHy2Profile} options={[
+              { value: '', label: t('hy2KeepProfile') },
+              { value: 'quic', label: t('hy2Quic') },
+              { value: 'salamander', label: t('hy2Salamander') },
+            ]} />
+          </Form.Item>
         )}
         <Form.Item label={t('protocols')} style={{ marginBottom: 0 }}>
           <Checkbox.Group

@@ -18,7 +18,7 @@ description: 管理 singbox-panel 代理面板——用户管理（创建/启用
 
 | 协议 | 用途 | 需要域名 | 特点 |
 |------|------|---------|------|
-| hysteria2 | 日常高速 | 是 | UDP/QUIC, Salamander 混淆 + BBR, 最快 |
+| hysteria2 | UDP 路径 | 是 | BBR 自适应；标准 QUIC + 内置页面，或 Salamander |
 | vless-reality | 稳定抗封 | 否 | TCP, 伪装正规网站, 零依赖 |
 | vless-httpupgrade | CDN 中转 | 是 | 用于被墙IP/IPv6-only节点 |
 
@@ -29,7 +29,7 @@ description: 管理 singbox-panel 代理面板——用户管理（创建/启用
 ```bash
 # 1. 创建节点
 POST /api/nodes
-{"name":"my-node", "host":"1.2.3.4", "domain":"node.example.com"}
+{"name":"my-node", "host":"ssh.example.com", "domain":"node.example.com"}
 
 # 2. 配置 SSH（面板机的公钥还没进目标机器时）
 POST /api/nodes/{id}/setup-ssh
@@ -37,7 +37,7 @@ POST /api/nodes/{id}/setup-ssh
 
 # 3. 安装 sing-box
 POST /api/nodes/{id}/install
-{"version":"latest"}  或 {"version":"1.13.8"}
+{"version":"recommended"}  或 {"version":"1.14.4"}
 
 # 4. 一键配置协议（自动选择、生成密钥、签证书、推送、启动）
 POST /api/nodes/{id}/auto-setup
@@ -46,6 +46,9 @@ POST /api/nodes/{id}/auto-setup
 # cdn → HTTPUpgrade + Reality
 # reality → Reality only
 # 也可手动指定: {"protocols":["hysteria2","vless-reality","vless-httpupgrade"]}
+# 可选 hysteria2_profile: "quic" / "salamander"。省略时保留原模式，新节点默认 quic。
+# quic 的 HTTP/3 页面内置在项目中，由 sing-box 直接返回，不另装网站服务。
+# 模式变化后客户端必须刷新订阅；Chrome QUIC 指纹由客户端内核实现，服务端开关不能代替。
 ```
 
 ### 用户管理
@@ -78,7 +81,7 @@ GET /sub/{sub_token}?format=clash  # Clash Meta YAML
 GET /api/nodes/{id}/status  → {reachable, installed, version, running}
 
 # 升级 sing-box
-POST /api/nodes/{id}/install  {"version":"latest"}
+POST /api/nodes/{id}/install  {"version":"recommended"}
 
 # DNS 与部署模式评估（不改任何东西，只解释判定依据）
 GET /api/nodes/{id}/setup-assessment?mode=auto&domain=node.example.com
@@ -150,6 +153,9 @@ POST /api/users/{id}/reset-traffic
   **逐个串行**（每个节点会重启 sing-box，并行等于全网同时断）；
   部分成功返回 **207**、全部失败返回 **502**，只看状态码不会把"半个机群"误读成成功。
   先用 `dry_run: true` 看会动哪些节点。
+  可带 `"upgrade":true,"version":"1.14.4","hysteria2_profile":"quic"`：逐台升级稳定版再重配。
+  升级先验版本/统计标签/现有配置，重启后回读运行的二进制；失败回滚二进制。
+  升级成功而后续重配失败时，保留已升级的二进制，分别看 `install` 与 `response`。
   **CDN 节点要单独跑一次**：默认 `mode:"auto"` 对橙云域名会返回 422（不肯只凭
   DNS 不一致就断定是 CDN，要人明确表态），所以 de 这类节点补一条
   `{"node_ids":[4],"mode":"cdn"}`。整机群跑出 207 而失败的恰好是 CDN 节点时，
@@ -162,6 +168,15 @@ POST /api/users/{id}/reset-traffic
 - `POST /api/nodes/{id}/cert-renew` — 重签 TLS 入站证书（`{"force":true}` 无视有效期）。
   只碰证书，不动端口 / UUID / Reality 密钥，所以不会让已发出去的订阅失效。
   签完从节点回读到期时间，据此判定成败，不看 acme.sh 的退出码
+
+### 换 IP
+
+- 使用 `scripts/migrate_dns.py`，以 `CLOUDFLARE_DNS_TOKEN`、`CLOUDFLARE_ZONE_ID` 提供凭据。
+  `--old-ip OLD --new-ip NEW` 先预览，`--apply` 才写入；只改精确匹配记录的地址并回读，保留 TTL/灰云和其他元数据。
+- DNS 生效且机器可达后，把节点 `host` 改为稳定的管理域名，再通过 auto-setup/reprovision 更新配置。
+  Hysteria2 订阅使用证书域名；Reality 经直连 DNS 验证才使用该域名，SNI 仍是握手目标。
+- `scripts/audit_ip.py --ip OLD --host HOST` 只输出文件名和出现次数，不输出凭据；可重复传 `--host`、`--root`。
+  SQLite 需经应用/只读查询检查，不做文件替换。不可达机器必须记为未检查。
 
 ### 订阅
 - `GET /sub/{token}` — 订阅 (自动识别客户端格式)
