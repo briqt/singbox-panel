@@ -1,5 +1,13 @@
 .PHONY: web build build-stamped test deploy verify-deploy
 
+# go.mod 是 Go 版本的唯一事实源，CI 用 go-version-file 读它。但本地装的是更新的
+# Go 时，`go build` 会用本地那套编译，产出的二进制与 CI 不是同一个文件——v0.5.3
+# 和 v0.5.4 都得手动 `GOTOOLCHAIN=go1.25.0 make build` 才能比对 sha256，否则
+# 同一个 commit 得到两个不同的哈希。这里把 GOTOOLCHAIN 从 go.mod 推出来钉死，
+# 版本仍然只写在 go.mod 一处。
+GO_VERSION := $(shell awk '$$1=="go"{print $$2; exit}' go.mod)
+export GOTOOLCHAIN := go$(GO_VERSION)
+
 # 前端产物 web/dist 由 go:embed 打进二进制，任何 go build 之前必须先跑 web。
 # pnpm 经 corepack 调用，无需全局安装（版本锁在 web/package.json 的 packageManager）。
 web:
