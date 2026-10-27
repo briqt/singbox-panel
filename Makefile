@@ -26,8 +26,15 @@ LDFLAGS = -s -w \
 	-X github.com/briqt/singbox-panel/buildinfo.commit=$(COMMIT) \
 	-X github.com/briqt/singbox-panel/buildinfo.date=$(BUILD_DATE)
 
+# CGO_ENABLED=0 is part of the build contract, not a local preference.
+# On Linux `go build` defaults to CGO_ENABLED=1 and links against glibc, so the
+# release artifact came out dynamically linked while a macOS cross-build stayed
+# static — same commit, two different binaries, and the "single file" promise
+# silently broken. Forcing it here makes both ends agree and keeps the binary
+# runnable on musl or a stripped image. Storage is modernc.org/sqlite (pure Go),
+# so nothing needs cgo.
 build: web
-	GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$(LDFLAGS)" -o bin/singbox-panel .
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$(LDFLAGS)" -o bin/singbox-panel .
 
 # Same stamp, caller-chosen output and target platform. CI uses this so a
 # release artifact reports the same version a local `make build` would.
@@ -39,7 +46,7 @@ build: web
 OUT ?= bin/singbox-panel
 build-stamped:
 	@touch web/dist/.gitkeep
-	go build -trimpath -ldflags="$(LDFLAGS)" -o $(OUT) .
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(OUT) .
 
 test:
 	go test ./...
