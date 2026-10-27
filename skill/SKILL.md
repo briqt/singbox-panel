@@ -49,8 +49,8 @@ POST /api/nodes/{id}/auto-setup
 # 可选 hysteria2_profile: "quic" / "salamander"。省略时保留原模式，新节点默认 quic。
 # quic 的 HTTP/3 页面内置在项目中，由 sing-box 直接返回，不另装网站服务。
 # 模式变化后客户端必须刷新订阅；Chrome QUIC 指纹由客户端内核实现，服务端开关不能代替。
-# 客户端 Reality 被重置、节点侧探测却成功时，可用 reality_sni 指定已实测目标。
-# 例如 {"protocols":["vless-reality"],"reality_sni":"www.mozilla.org"}；仍校验目标 TLS，保留原密钥。
+# 客户端 Reality 被重置、节点侧探测却成功时，可用 reality_sni 指定已实测目标（也可用
+# POST /api/nodes/{id}/reality-target 单独换，只动目标不动密钥）。仍校验目标 TLS，保留原密钥。
 ```
 
 ### 用户管理
@@ -170,6 +170,18 @@ POST /api/users/{id}/reset-traffic
 - `POST /api/nodes/{id}/cert-renew` — 重签 TLS 入站证书（`{"force":true}` 无视有效期）。
   只碰证书，不动端口 / UUID / Reality 密钥，所以不会让已发出去的订阅失效。
   签完从节点回读到期时间，据此判定成败，不看 acme.sh 的退出码
+
+### Reality 握手目标（测速与更换）
+- `GET /api/nodes/{id}/reality-targets` — 在**这台节点上**实测全部候选，只读：
+  返回每个目标的 `http` / `status` / `latency_ms` / `qualifies`，合格者按延迟排序，
+  未应答的也列出来并注明原因。`current` 标出正在用的那个。
+  同一目标换个机房可能一个通一个不通（`www.deepseek.com` 在东京 200，在 LA 直接连不上），
+  所以这个问题只能按节点问，不能全局断言。
+- `POST /api/nodes/{id}/reality-target` — `{"sni":"www.bing.com"}` 换掉 Reality 的伪装目标。
+  先在该节点上探测，过不了 TLS 1.3 + HTTP/2 + 非错误状态码就返 422；通过后只改
+  `sni` 与 `handshake_server`，**密钥对 / short_id / 端口 / UUID 全部原样**，再推配置。
+  推送失败会把库里记录回滚成原目标——数据库说一套、节点跑一套比不改更糟。
+  目标改了客户端要刷新订阅；Reality 的密钥没变，所以只是换了个伪装站，不是新节点。
 
 ### 换 IP
 

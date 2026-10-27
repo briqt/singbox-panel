@@ -48,6 +48,10 @@ func (h *NodeOpsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.tune(w, r)
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/cert-renew"):
 		h.HandleCertRenew(w, r)
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/reality-targets"):
+		h.HandleRealityTargets(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/reality-target"):
+		h.HandleRealityTarget(w, r)
 	default:
 		http.NotFound(w, r)
 	}

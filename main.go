@@ -125,6 +125,7 @@ func main() {
 		} else if strings.HasSuffix(path, "/version") || strings.HasSuffix(path, "/install") ||
 			strings.HasSuffix(path, "/upgrade") || strings.HasSuffix(path, "/status") ||
 			strings.HasSuffix(path, "/tune") || strings.HasSuffix(path, "/setup-ssh") ||
+			strings.HasSuffix(path, "/reality-targets") || strings.HasSuffix(path, "/reality-target") ||
 			strings.HasSuffix(path, "/cert-renew") {
 			nodeOpsHandler.ServeHTTP(w, r)
 		} else if strings.HasSuffix(path, "/cert-upload") {
