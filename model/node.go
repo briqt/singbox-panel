@@ -244,6 +244,11 @@ func (s *NodeStore) Delete(id int) error {
 	if _, err := tx.Exec(`DELETE FROM traffic_logs WHERE node_id = ?`, id); err != nil {
 		return err
 	}
+	for _, table := range []string{"host_traffic_hourly", "host_traffic_hours", "host_traffic_peers"} {
+		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE node_id = ?`, id); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(`DELETE FROM nodes WHERE id = ?`, id); err != nil {
 		return err
 	}

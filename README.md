@@ -242,7 +242,16 @@ become stale.
 ### Node Operations
 - `GET /api/nodes/{id}/status` — SSH reachability, sing-box status, and per-inbound TCP/UDP listeners
 - `GET /api/nodes/{id}/version` — sing-box version
-- `POST /api/nodes/{id}/setup-ssh` — inject panel SSH key via password
+- `POST /api/nodes/{id}/setup-ssh` — inject the panel SSH key using a one-time
+  root password. The password connection pins the host key (TOFU) like every
+  other connection, the password is **not stored**, and success means a
+  key-only login was verified.
+- `POST /api/nodes/{id}/ssh-harden` — public-key-only SSH (`PasswordAuthentication no`,
+  `KbdInteractiveAuthentication no`, `PermitRootLogin prohibit-password`). Refuses
+  unless the panel key works on its own; reads back `sshd -T`, then asks the
+  **live** sshd which methods it still offers (without ever sending a password),
+  and confirms a fresh key login still works. Any failure rolls the drop-in back.
+  `POST /api/batch/ssh-harden` does every enabled node, one at a time (200/207/502).
 - `POST /api/nodes/{id}/install` — install/upgrade sing-box
   (`version`: `recommended`/empty = reviewed **1.14.4**, `latest` = latest
   upstream fork release, or a pinned stable `x.y.z`). The candidate must report
@@ -294,6 +303,40 @@ there is no separate cert-issue or DNS-check endpoint.
 Usage samples are kept for **3 calendar months** (the current month plus the two
 before it) and pruned daily; the stats API refuses to answer beyond that boundary,
 so charts never imply data the panel no longer has.
+
+### Machine traffic
+
+Proxy usage (above) is what sing-box carried per user. **Machine traffic** is what
+the node's NIC actually moved — what a provider bills: proxy traffic in *and*
+out, plus Caddy, DERP, SSH, package updates and everything else on the box.
+
+- `POST /api/nodes/{id}/traffic-audit` — install or upgrade the collector
+  (`{"interface":"eth0"}` optional; auto-detected from the IPv4/IPv6 default
+  routes). Preflight blocks on python3 < 3.9, missing nft/iproute2, or less than
+  1 GiB free. Success is read back: one real sample taken, timer active, and
+  sing-box's MainPID unchanged. auto-setup runs this as its last, non-fatal step.
+- `GET /api/nodes/{id}/traffic-audit` — collector health (`healthy`, last sample
+  age, pending error, whether it runs this panel's version)
+- `DELETE /api/nodes/{id}/traffic-audit` — remove it and restore what it changed
+- `POST /api/batch/traffic-audit` — install on every enabled node, serially (200/207/502)
+- `GET /api/host-traffic?node_id=&hours=` — hourly conclusions: NIC and public
+  (nft) totals, per service (systemd IPAccounting), per server port, TCP
+  SYN/RST packet counts, top public peers, and completeness (hours with data,
+  max sampling gap, counter resets)
+
+How it is bounded, on the node: counting only — a dedicated nft table and
+runtime `IPAccounting` (gone on reboot); no packet capture, no filter/NAT/route
+change, no service restart. A one-minute systemd timer under `CPUQuota=10%`,
+`MemoryMax=96M`; at most **48 h / 48 MiB** of minute-level data, sampling pauses
+below 192 MiB free. That buffer exists so a panel outage loses nothing.
+
+In the panel: the poller pulls finished hours every 10 minutes over its pooled
+SSH connections and stores them idempotently. Hourly conclusions share proxy
+usage retention (**3 calendar months**); per-peer detail (top 50 per hour per
+direction, the rest summed) is kept **7 days**.
+
+Service counters include loopback and private traffic, so they are not summed
+into a public total; `system.slice` is all system services together.
 
 ## Changing a node IP
 

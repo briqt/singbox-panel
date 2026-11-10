@@ -52,6 +52,8 @@ func (h *NodeOpsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.HandleRealityTargets(w, r)
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/reality-target"):
 		h.HandleRealityTarget(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/ssh-harden"):
+		h.sshHarden(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -367,7 +369,10 @@ func (h *NodeOpsHandler) setupSSH(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req SetupSSHReq
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
 
 	// Read panel's public key
 	pubKeyBytes, err := os.ReadFile(h.Config.SSHKeyPath + ".pub")
@@ -376,55 +381,53 @@ func (h *NodeOpsHandler) setupSSH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pubKey := strings.TrimSpace(string(pubKeyBytes))
+	if !strings.HasPrefix(pubKey, "ssh-") || strings.ContainsAny(pubKey, "\"'`$\\\n") {
+		writeError(w, http.StatusInternalServerError, "panel public key has an unexpected format")
+		return
+	}
 
-	// Connect with password
+	// The password is used for this one connection and never stored: nodes are
+	// meant to end up key-only, and a stored root password is a liability.
 	password := req.Password
 	if password == "" {
 		password = node.SSHPassword
 	}
 	if password == "" {
-		writeError(w, http.StatusBadRequest, "password required (provide in request body or set ssh_password on node)")
+		writeError(w, http.StatusBadRequest, "password required in request body")
 		return
 	}
 
+	// Password login is exactly where host-key pinning matters most: an
+	// impersonating host would receive the root password itself. This first
+	// contact pins the key (TOFU) that every later connection is checked against.
 	sshConfig := &ssh.ClientConfig{
 		User:            node.SSHUser,
 		Auth:            []ssh.AuthMethod{ssh.Password(password)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: h.Config.hostKeyCallback(),
 		Timeout:         10 * time.Second,
 	}
-	host := node.Host
-	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
-		host = "[" + host + "]"
-	}
-	addr := fmt.Sprintf("%s:%d", host, node.Port)
-	client, err := ssh.Dial("tcp", addr, sshConfig)
+	client, err := ssh.Dial("tcp", sshDialAddr(node), sshConfig)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "ssh connect with password failed: "+err.Error())
+		writeError(w, http.StatusBadGateway, "ssh connect with password failed: "+err.Error())
 		return
 	}
 	defer client.Close()
 
-	// Inject public key
-	injectCmd := fmt.Sprintf(`mkdir -p ~/.ssh && chmod 700 ~/.ssh && grep -qF "%s" ~/.ssh/authorized_keys 2>/dev/null || echo "%s" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && echo "key_added"`, pubKey, pubKey)
+	injectCmd := fmt.Sprintf(`umask 077; mkdir -p ~/.ssh && chmod 700 ~/.ssh && { grep -qxF '%s' ~/.ssh/authorized_keys 2>/dev/null || echo '%s' >> ~/.ssh/authorized_keys; } && chmod 600 ~/.ssh/authorized_keys && echo key_added`, pubKey, pubKey)
 	out, err := sshRun(client, injectCmd)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "inject key failed: "+strings.TrimSpace(out))
+		writeError(w, http.StatusBadGateway, "inject key failed: "+strings.TrimSpace(out))
 		return
 	}
 
-	// Save password to node for future fallback
-	if req.Password != "" {
-		h.Nodes.DB.Exec(`UPDATE nodes SET ssh_password = ? WHERE id = ?`, req.Password, node.ID)
-	}
-
-	// Verify key auth works
-	verifyClient, err := h.Config.sshConnect(node)
+	// Verify with the key alone; a stored password must not mask a broken key.
+	verifyClient, err := h.Config.sshConnectKeyOnly(node)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"status": "key_injected_but_verify_failed", "node": node.Name, "error": err.Error()})
+		writeJSON(w, http.StatusBadGateway, map[string]any{"status": "key_injected_but_verify_failed", "node": node.Name, "error": err.Error()})
 		return
 	}
 	verifyClient.Close()
+	h.clearStoredPassword(node)
 
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "node": node.Name, "message": "SSH key auth configured successfully"})
 }

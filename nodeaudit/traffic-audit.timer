@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect bounded host traffic accounting once per minute (singbox-panel)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=1s
+Unit=traffic-audit.service
+
+[Install]
+WantedBy=timers.target

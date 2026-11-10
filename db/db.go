@@ -189,4 +189,45 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	name TEXT PRIMARY KEY,
 	applied_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- 整机流量的按小时结论（节点 traffic-audit 采集、面板拉取）。hour 为 UTC 整点的
+-- Unix 秒。条数固定、体积小，跟 traffic_logs 同一保留期。
+CREATE TABLE IF NOT EXISTS host_traffic_hourly (
+	node_id INTEGER NOT NULL,
+	hour INTEGER NOT NULL,
+	kind TEXT NOT NULL,
+	name TEXT NOT NULL,
+	rx INTEGER NOT NULL DEFAULT 0,
+	tx INTEGER NOT NULL DEFAULT 0,
+	rx_packets INTEGER NOT NULL DEFAULT 0,
+	tx_packets INTEGER NOT NULL DEFAULT 0,
+	resets INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (node_id, hour, kind, name)
+);
+CREATE INDEX IF NOT EXISTS idx_host_traffic_hourly_hour ON host_traffic_hourly(hour);
+
+-- 每个小时一行的采样质量，以及来源 Top N 之外合并掉的部分。
+CREATE TABLE IF NOT EXISTS host_traffic_hours (
+	node_id INTEGER NOT NULL,
+	hour INTEGER NOT NULL,
+	samples INTEGER NOT NULL DEFAULT 0,
+	max_gap REAL NOT NULL DEFAULT 0,
+	rx_other_bytes INTEGER NOT NULL DEFAULT 0,
+	rx_other_count INTEGER NOT NULL DEFAULT 0,
+	tx_other_bytes INTEGER NOT NULL DEFAULT 0,
+	tx_other_count INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (node_id, hour)
+);
+
+-- 公网对端明细，体积最大，只留 7 天。
+CREATE TABLE IF NOT EXISTS host_traffic_peers (
+	node_id INTEGER NOT NULL,
+	hour INTEGER NOT NULL,
+	direction TEXT NOT NULL,
+	address TEXT NOT NULL,
+	bytes INTEGER NOT NULL DEFAULT 0,
+	packets INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (node_id, hour, direction, address)
+);
+CREATE INDEX IF NOT EXISTS idx_host_traffic_peers_hour ON host_traffic_peers(hour);
 `

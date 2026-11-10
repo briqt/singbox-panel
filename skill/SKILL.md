@@ -31,9 +31,12 @@ description: 管理 singbox-panel 代理面板——用户管理（创建/启用
 POST /api/nodes
 {"name":"my-node", "host":"ssh.example.com", "domain":"node.example.com"}
 
-# 2. 配置 SSH（面板机的公钥还没进目标机器时）
+# 2. 配置 SSH（面板机的公钥还没进目标机器时）。密码只用这一次、不入库；
+#    这次连接同样固定主机密钥（TOFU），之后不一致即拒连
 POST /api/nodes/{id}/setup-ssh
 {"password":"root密码"}
+# 2b. 公钥可用后关闭密码登录（先验证公钥，回读 sshd -T 与实际服务端提供的方式，失败自动回滚）
+POST /api/nodes/{id}/ssh-harden
 
 # 3. 安装 sing-box
 POST /api/nodes/{id}/install
@@ -158,6 +161,16 @@ python3 scripts/provision_upstream.py --env-file /opt/singbox-panel/.env \
 ```
 
 回滚旧版本时必须同时恢复匹配的升级前数据库备份；不能仅换回旧二进制，因为旧版本只认识节点级权限。
+
+### 机器流量（整机网卡口径，区别于按用户的代理流量）
+
+- `POST /api/nodes/{id}/traffic-audit` — 安装/升级节点采集器（auto-setup 末步也会装）。回读判据：真实采样一次、定时器 active、sing-box MainPID 不变
+- `GET /api/nodes/{id}/traffic-audit` — 采集器健康（最近采样多久前、有无错误、版本是否最新）
+- `DELETE /api/nodes/{id}/traffic-audit` — 卸载并恢复其改动
+- `POST /api/batch/traffic-audit` — 全部启用节点逐个安装，200/207/502
+- `GET /api/host-traffic?node_id=&hours=24` — 按小时结论：网卡/公网总量、按服务、按端口、TCP SYN/RST、公网对端 Top、完整度
+
+节点只留 48h 分钟级缓冲（≤48 MiB，CPU 10%、内存 96M 上限）；面板每 10 分钟拉取已结束的小时，幂等写入。小时结论与代理用量同保留期（3 个自然月），对端明细 7 天。服务计数含回环与内网，不可相加当公网总量。
 
 ### 节点运维
 - `GET /api/nodes/{id}/status` — SSH 连通性、sing-box 状态、各入站 TCP/UDP 监听状态，

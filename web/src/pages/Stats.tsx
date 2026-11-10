@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Card, Col, DatePicker, Row, Segmented, Select, Skeleton, Space, Table, Tabs, Tag, Button, Typography } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import {
@@ -53,9 +54,38 @@ function bytesColumn<T>(title: string, get: (row: T) => number, color?: string):
   }
 }
 
+const HostTraffic = lazy(() => import('./HostTraffic'))
+
+type StatsView = 'proxy' | 'host'
+
+// 两个口径分开展示，不混算：代理流量是 sing-box 按用户转发的量；机器流量是网卡实际收发，
+// 即服务商计费看的量（代理的进 + 出，再加机器上其他一切）。
+export default function Stats() {
+  const { t } = useI18n()
+  const [view, setView] = useState<StatsView>('proxy')
+  const switcher = (
+    <Segmented
+      value={view}
+      onChange={(value) => setView(value as StatsView)}
+      options={[
+        { value: 'proxy', label: t('proxyTraffic') },
+        { value: 'host', label: t('hostTraffic') },
+      ]}
+    />
+  )
+  if (view === 'host') {
+    return (
+      <Suspense fallback={<Skeleton active />}>
+        <HostTraffic switcher={switcher} />
+      </Suspense>
+    )
+  }
+  return <ProxyStats switcher={switcher} />
+}
+
 // 明细行（日 × 用户 × 节点）是本页唯一数据源，卡片 / 图表 / 汇总表都是它的求和视图，
 // 因此各处口径不可能互相矛盾。
-export default function Stats() {
+function ProxyStats({ switcher }: { switcher: ReactNode }) {
   const { t } = useI18n()
   const toast = useToast()
   const [meta, setMeta] = useState<StatsMeta | null>(null)
@@ -186,9 +216,12 @@ export default function Stats() {
           tz: meta.timezone,
         })}
         extra={
-          <Button icon={<DownloadOutlined />} onClick={exportCsv} disabled={!rows.length}>
-            {t('export')}
-          </Button>
+          <Space wrap>
+            {switcher}
+            <Button icon={<DownloadOutlined />} onClick={exportCsv} disabled={!rows.length}>
+              {t('export')}
+            </Button>
+          </Space>
         }
       />
 

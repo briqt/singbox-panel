@@ -1,0 +1,30 @@
+[Unit]
+Description=Host traffic accounting snapshot (singbox-panel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/traffic-audit.py collect
+StateDirectory=traffic-audit
+StateDirectoryMode=0700
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=10%
+MemoryMax=96M
+TasksMax=16
+TimeoutStartSec=45s
+LimitFSIZE=50M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ReadWritePaths=/var/lib/traffic-audit
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+# 成功时不输出；失败原因进 journal，同时写 last-error.json 供面板读取。
+# 静默的定时任务等于没有。
+StandardOutput=null
+StandardError=journal

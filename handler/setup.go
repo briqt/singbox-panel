@@ -24,6 +24,9 @@ type SetupHandler struct {
 	Nodes  *model.NodeStore
 	Config *ConfigHandler
 	Ops    *NodeOpsHandler
+	// Audit, when set, installs the whole-machine traffic collector as the last
+	// step, so every node set up by the panel is accounted the same way.
+	Audit *HostAuditHandler
 }
 
 type AutoSetupReq struct {
@@ -559,9 +562,21 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 		tuning = &KernelTuneResult{Note: "kernel tuning failed: " + tuneErr.Error()}
 	}
 
+	// Traffic accounting is observational: a node that cannot run it is still a
+	// working proxy, so a failure is reported, never fatal. Re-running
+	// auto-setup also refreshes the counted ports after inbound changes.
+	var audit any
+	if h.Audit != nil {
+		if res, err := h.Audit.Install(node, ""); err != nil {
+			audit = map[string]any{"error": err.Error(), "result": res}
+		} else {
+			audit = res
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"inbounds": results, "push": "ok", "sync": syncResults, "node": node.Name,
-		"assessment": assessment, "kernel_tuning": tuning,
+		"assessment": assessment, "kernel_tuning": tuning, "traffic_audit": audit,
 	})
 }
 

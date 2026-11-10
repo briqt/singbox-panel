@@ -28,8 +28,12 @@ type TrafficPoller struct {
 	Users   *model.UserStore
 	Traffic *model.TrafficStore
 	Config  *ConfigHandler
+	// HostAudit, when set, also pulls whole-machine hourly traffic over the
+	// same pooled connections.
+	HostAudit *HostAuditHandler
 
 	pool *sshPool
+	host *hostPuller
 
 	// health remembers the last outcome per node so a node that is down logs
 	// once on the way down and once on the way back up, instead of once a minute
@@ -48,6 +52,10 @@ func (p *TrafficPoller) Start() {
 		p.health = make(map[int]bool)
 	}
 	go p.loop()
+	if p.HostAudit != nil {
+		p.host = &hostPuller{audit: p.HostAudit, pool: p.pool, state: map[int]string{}}
+		go p.host.loop(p.Nodes.ListEnabled)
+	}
 	go p.retentionLoop()
 }
 
@@ -65,6 +73,9 @@ func (p *TrafficPoller) retentionLoop() {
 	for {
 		if n, err := p.Traffic.Prune(); err == nil && n > 0 {
 			log.Printf("traffic: pruned %d samples recorded before %s", n, p.Traffic.RetentionStart())
+		}
+		if p.host != nil {
+			p.host.prune()
 		}
 		time.Sleep(24 * time.Hour)
 	}

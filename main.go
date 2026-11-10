@@ -37,6 +37,7 @@ func main() {
 	nodeStore := &model.NodeStore{DB: database}
 	accessStore := &model.AccessStore{DB: database}
 	trafficStore := &model.TrafficStore{DB: database, Loc: cfg.Location}
+	hostTrafficStore := &model.HostTrafficStore{DB: database}
 
 	authHandler := &handler.AuthHandler{
 		Users: userStore, AdminUser: cfg.AdminUser,
@@ -50,12 +51,13 @@ func main() {
 	accessHandler := &handler.AccessHandler{Access: accessStore, Nodes: nodeStore, Sync: configHandler}
 	nodeHandler := &handler.NodeHandler{Store: nodeStore, Access: accessStore, Sync: configHandler}
 	nodeOpsHandler := &handler.NodeOpsHandler{Nodes: nodeStore, Config: configHandler}
-	setupHandler := &handler.SetupHandler{Nodes: nodeStore, Config: configHandler, Ops: nodeOpsHandler}
+	hostAuditHandler := &handler.HostAuditHandler{Nodes: nodeStore, Config: configHandler, Store: hostTrafficStore, Traffic: trafficStore}
+	setupHandler := &handler.SetupHandler{Nodes: nodeStore, Config: configHandler, Ops: nodeOpsHandler, Audit: hostAuditHandler}
 	reprovisionHandler := &handler.ReprovisionHandler{Nodes: nodeStore, Setup: setupHandler}
 	validateHandler := &handler.ValidateHandler{Config: configHandler}
 	statsHandler := &handler.StatsHandler{Users: userStore, Nodes: nodeStore, Traffic: trafficStore}
 
-	trafficPoller := &handler.TrafficPoller{Nodes: nodeStore, Users: userStore, Traffic: trafficStore, Config: configHandler}
+	trafficPoller := &handler.TrafficPoller{Nodes: nodeStore, Users: userStore, Traffic: trafficStore, Config: configHandler, HostAudit: hostAuditHandler}
 	trafficPoller.Start()
 	defer trafficPoller.Close()
 
@@ -126,8 +128,10 @@ func main() {
 			strings.HasSuffix(path, "/upgrade") || strings.HasSuffix(path, "/status") ||
 			strings.HasSuffix(path, "/tune") || strings.HasSuffix(path, "/setup-ssh") ||
 			strings.HasSuffix(path, "/reality-targets") || strings.HasSuffix(path, "/reality-target") ||
-			strings.HasSuffix(path, "/cert-renew") {
+			strings.HasSuffix(path, "/cert-renew") || strings.HasSuffix(path, "/ssh-harden") {
 			nodeOpsHandler.ServeHTTP(w, r)
+		} else if strings.HasSuffix(path, "/traffic-audit") {
+			hostAuditHandler.ServeHTTP(w, r)
 		} else if strings.HasSuffix(path, "/cert-upload") {
 			validateHandler.HandleCertUpload(w, r)
 		} else if strings.HasSuffix(path, "/setup-assessment") {
@@ -146,6 +150,9 @@ func main() {
 	mux.HandleFunc("/api/batch/push-all", admin(batchHandler.PushAll))
 	mux.HandleFunc("/api/batch/reprovision", admin(reprovisionHandler.HandleReprovision))
 	mux.HandleFunc("/api/batch/template", admin(batchHandler.ApplyTemplate))
+	mux.HandleFunc("/api/batch/traffic-audit", admin(hostAuditHandler.HandleBatch))
+	mux.HandleFunc("/api/batch/ssh-harden", admin(nodeOpsHandler.HandleBatchSSHHarden))
+	mux.HandleFunc("/api/host-traffic", admin(hostAuditHandler.HandleQuery))
 	mux.HandleFunc("/api/stats/meta", admin(statsHandler.HandleMeta))
 	mux.HandleFunc("/api/stats/usage", admin(statsHandler.HandleUsage))
 	mux.HandleFunc("/api/stats/users", admin(statsHandler.HandleUserStats))

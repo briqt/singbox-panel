@@ -26,6 +26,9 @@ make deploy DEPLOY_HOST=<ssh别名>   # 构建 + 上传 + 重启 + 回读 /api/v
 | `POST /api/nodes/{id}/tune` | 对存量节点重新应用内核基线并回读校验 |
 | `POST /api/nodes/{id}/cert-renew` | 重签 TLS 入站的证书并回读校验，不动端口与 Reality 密钥（`{"force":true}` 可无视有效期强制重签） |
 | `POST /api/batch/reprovision` | 对所有启用节点重跑 auto-setup，逐个串行；部分成功 207、全失败 502，`{"dry_run":true}` 先看会动谁 |
+| `POST /api/nodes/{id}/ssh-harden` | 关闭节点密码登录（只留公钥）。先证明面板公钥单独可用，回读 `sshd -T`，再问**运行中的** sshd 还提供哪些方式（探测从不发送密码），任一不符即回滚；`/api/batch/ssh-harden` 逐个执行 |
+| `POST /api/nodes/{id}/traffic-audit` | 安装/升级整机流量采集器并回读（真实采样一次、定时器 active、sing-box MainPID 不变）；`GET` 看健康、`DELETE` 卸载，`/api/batch/traffic-audit` 逐个执行 |
+| `GET /api/host-traffic?node_id=&hours=` | 整机流量的按小时结论：网卡、服务、端口、公网对端、完整度 |
 | `GET /api/version` | 当前运行的构建（version/commit/dirty）。免鉴权，`make deploy` 用它确认新二进制真的在服务 |
 
 ## 仓库结构
@@ -48,7 +51,10 @@ make deploy DEPLOY_HOST=<ssh别名>   # 构建 + 上传 + 重启 + 回读 /api/v
 │   ├── cert.go             #   TLS 证书签发/续期/到期回读（单一权威）
 │   ├── nodeops.go          #   装/升级/状态/tune/cert-renew
 │   ├── setup.go            #   一键纳管
+│   ├── sshharden.go        #   节点只留公钥登录 + 回读校验
+│   ├── hostaudit.go        #   整机流量：采集器安装/状态/卸载、按小时拉取
 │   └── reprovision.go      #   批量重跑 auto-setup（全网协议升级走这里）
+├── nodeaudit/              # 节点整机流量采集器（Python 脚本 + systemd 单元，go:embed 打进二进制）
 ├── singbox/                # sing-box 配置与 Clash 订阅生成
 ├── web/                    # React + Vite + antd SPA（dist 入库占位，node_modules 不入库）
 └── deploy/                 # systemd 单元
@@ -106,6 +112,12 @@ CI（`.github/workflows`）跑 `make test` 后交叉编译 linux 的 amd64 与 a
 
 - 走节点 sing-box 的 `v2ray_api` StatsService，`reset=true` 每次取增量，所以不需要基线跟踪，节点重启就是从零重新计数。
 - 这要求 sing-box 用 `with_v2ray_api` tag 构建；上游 release 二进制**不含**该 tag，`install` 拉的是 [briqt/sing-box](https://github.com/briqt/sing-box) 的构建。
+
+### 整机流量
+
+- **两个口径分开，不混算。** 代理流量（`traffic_logs`）是 sing-box 按用户转发的量；整机流量是网卡实际收发，即服务商计费口径（代理的进 + 出，加机器上其他一切）。东京曾出现"面板 160G、后台 400G"，两者口径不同，直接相减得不出"其他程序用了多少"。
+- **节点只做缓冲，结论在面板。** 节点保留 48h 分钟级数据（≤48 MiB），面板每 10 分钟经 `sshpool` 拉取**已结束**的小时并按（节点, 小时, 项目）覆盖写入，重复拉取不会重复计数（`TestSaveHoursIsIdempotent`）。小时结论与 `traffic_logs` 同保留期，公网对端明细 7 天。
+- 采集只计数：独立 nft 表 + `--runtime` IPAccounting，不抓包、不改过滤/NAT/路由、不重启业务。端口布局变化时整表重建，计数器重置会被标成 `reset_lower_bound`，不会被当成增量。
 
 ### 时区
 

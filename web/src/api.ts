@@ -198,6 +198,72 @@ export interface UsageQuery {
   node_id?: number
 }
 
+export interface HostTrafficItem {
+  kind: string
+  name: string
+  rx: number
+  tx: number
+  rx_packets: number
+  tx_packets: number
+  resets: number
+}
+
+export interface HostTrafficPeer {
+  address: string
+  bytes: number
+  packets: number
+}
+
+export interface HostTrafficPoint {
+  hour: number
+  nic_rx: number
+  nic_tx: number
+  wan_rx: number
+  wan_tx: number
+  samples: number
+  max_gap: number
+  resets: number
+  services: Record<string, number>
+}
+
+export interface HostTrafficSummary {
+  node_id: number
+  from: number
+  to: number
+  hours: number
+  expected: number
+  samples: number
+  max_gap: number
+  resets: number
+  totals: HostTrafficItem[] | null
+  series: HostTrafficPoint[] | null
+  peers_from: number
+  top_peers: { rx: HostTrafficPeer[] | null; tx: HostTrafficPeer[] | null }
+  peer_other: { rx: { count: number; bytes: number }; tx: { count: number; bytes: number } }
+}
+
+export interface HostTrafficRetention {
+  hourly_from: number
+  peers_days: number
+  node_buffer_hours: number
+}
+
+export interface TrafficAuditStatus {
+  node: string
+  installed: boolean
+  healthy?: boolean
+  reason?: string
+  up_to_date?: boolean
+  detail?: string
+  status?: {
+    interface?: string
+    last_sample?: number
+    last_sample_age?: number
+    storage_bytes?: number
+    first_sample?: number
+  }
+}
+
 export interface MeInfo {
   id: number
   name: string
@@ -353,4 +419,12 @@ export const api = {
   usage: (q: UsageQuery) => request<UsageRow[]>(`/api/stats/usage?${usageParams(q)}`),
   userStats: () => request<UserStat[]>('/api/stats/users'),
   nodeStats: () => request<NodeStat[]>('/api/stats/nodes'),
+
+  hostTraffic: (nodeId: number, hours: number) =>
+    request<{ summary: HostTrafficSummary; retention: HostTrafficRetention }>(
+      `/api/host-traffic?node_id=${nodeId}&hours=${hours}`,
+    ),
+  trafficAuditStatus: (nodeId: number) => request<TrafficAuditStatus>(`/api/nodes/${nodeId}/traffic-audit`),
+  installTrafficAudit: (nodeId: number) =>
+    request<unknown>(`/api/nodes/${nodeId}/traffic-audit`, send('POST', {})),
 }
