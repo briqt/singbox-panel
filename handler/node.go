@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/briqt/singbox-panel/model"
+	"github.com/briqt/singbox-panel/singbox"
 )
 
 type NodeHandler struct {
@@ -90,6 +91,10 @@ func (h *NodeHandler) get(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusNotFound, "node not found")
 		return
+	}
+	names := singbox.SubscriptionNames(nwi.Node, nwi.Inbounds)
+	for i := range nwi.Inbounds {
+		nwi.Inbounds[i].DisplayName = names[nwi.Inbounds[i].ID]
 	}
 	writeJSON(w, http.StatusOK, nwi)
 }

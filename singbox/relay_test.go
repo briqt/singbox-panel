@@ -3,7 +3,9 @@ package singbox
 import (
 	"encoding/base64"
 	"encoding/json"
+	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -72,9 +74,9 @@ func TestRelayInboundListensWithoutUsersAndRejectsOtherSources(t *testing.T) {
 
 func TestRelayRefusesUnsafeSettings(t *testing.T) {
 	cases := map[string]model.NodeInbound{
-		"空白名单":   relayInbound(),
-		"全网白名单":  relayInbound("0.0.0.0/0"),
-		"非地址条目":  relayInbound("laxcg.example.com"),
+		"空白名单":  relayInbound(),
+		"全网白名单": relayInbound("0.0.0.0/0"),
+		"非地址条目": relayInbound("laxcg.example.com"),
 		"密钥长度不对": func() model.NodeInbound {
 			ib := relayInbound("203.0.113.4")
 			ib.Settings, _ = json.Marshal(map[string]any{"method": model.DefaultSS2022Method, "password": base64.StdEncoding.EncodeToString(make([]byte, 32)), "allowed_sources": []string{"203.0.113.4"}})
@@ -201,4 +203,53 @@ func clashProxyField(doc, proxy, key string) string {
 		}
 	}
 	return ""
+}
+
+// 面板展示名必须与订阅里的名字逐条一致（含默认线路、自定义线路与重名去重），
+// 落地入站不进订阅，也不应有展示名。
+func TestSubscriptionNamesMatchSubscriptions(t *testing.T) {
+	hy2 := json.RawMessage(`{"domain":"laxpro.example.com","cert_path":"/c","key_path":"/k"}`)
+	reality := json.RawMessage(`{"sni":"www.example.com","private_key":"p","public_key":"pub","short_id":"ab"}`)
+	inbounds := []model.NodeInbound{
+		{ID: 27, Tag: "hysteria2", Protocol: "hysteria2", Port: 443, Enabled: true, Settings: hy2},
+		{ID: 28, Tag: "vless-reality", Protocol: "vless-reality", Port: 443, Enabled: true, Settings: reality},
+		{ID: 44, Tag: "hysteria2-laxcg", Name: "laxpro-Hy2-laxcg", Protocol: "hysteria2", Port: 8443, Enabled: true, Custom: true, Settings: hy2},
+		{ID: 45, Tag: "vless-reality-laxcg", Name: "laxpro-Reality-laxcg", Protocol: "vless-reality", Port: 8443, Enabled: true, Custom: true, Settings: reality},
+		{ID: 46, Tag: "reality-2", Protocol: "vless-reality", Port: 2053, Enabled: true, Custom: true, Settings: reality},
+		relayInbound("203.0.113.4"),
+	}
+	node := model.Node{Name: "laxpro", Host: "198.51.100.8", Enabled: true}
+	names := SubscriptionNames(node, inbounds)
+	user := model.User{ID: 1, Name: "u", UUID: "uuid-1"}
+	nodes := []model.NodeWithInbounds{{Node: node, Inbounds: inbounds}}
+
+	var fromURI []string
+	for _, line := range strings.Split(strings.TrimSpace(GenerateSubscription(user, nodes)), "\n") {
+		_, fragment, _ := strings.Cut(line, "#")
+		name, err := url.PathUnescape(fragment)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fromURI = append(fromURI, name)
+	}
+	var fromClash []string
+	for _, line := range strings.Split(GenerateClashConfig(user, nodes), "\n") {
+		if value, ok := strings.CutPrefix(line, "  - name: "); ok && strings.HasPrefix(value, `"`) {
+			unquoted, _ := strconv.Unquote(value)
+			fromClash = append(fromClash, unquoted)
+		}
+	}
+	var expected []string
+	for _, ib := range inbounds[:5] {
+		expected = append(expected, names[ib.ID])
+	}
+	if !reflect.DeepEqual(fromURI, expected) || !reflect.DeepEqual(fromClash, expected) {
+		t.Fatalf("展示名与订阅不一致：\n面板 %v\nURI  %v\nClash %v", expected, fromURI, fromClash)
+	}
+	if !reflect.DeepEqual(expected, []string{"laxpro-Hy2", "laxpro-Reality", "laxpro-Hy2-laxcg", "laxpro-Reality-laxcg", "laxpro-Reality-2"}) {
+		t.Fatalf("订阅名不符合预期：%v", expected)
+	}
+	if _, ok := names[9]; ok {
+		t.Fatal("落地入站不进订阅，不应有展示名")
+	}
 }

@@ -1,7 +1,7 @@
 import argparse
 import unittest
 
-from provision_relay import ensure_relay, normalized_sources, parse_entry
+from provision_relay import desired_order, ensure_lines, ensure_relay, normalized_sources, parse_entry, same_outbound
 
 
 class RelayPanel:
@@ -65,6 +65,77 @@ class ProvisionRelayTest(unittest.TestCase):
     def test_live_config_drift_fails(self):
         with self.assertRaises(RuntimeError):
             ensure_relay(RelayPanel(drift=True), ARGS, ["203.0.113.4/32"], apply=True)
+
+
+class EntryPanel:
+    def __init__(self, inbounds):
+        self.inbounds = inbounds
+        self.writes = []
+
+    def call(self, method, path, data=None, raw=False):
+        if method == "GET" and path == "/api/nodes/2":
+            return {"id": 2, "name": "laxpro", "inbounds": [dict(item) for item in self.inbounds]}
+        if method == "POST" and path == "/api/nodes/2/inbounds":
+            self.writes.append(("create", data["tag"]))
+            item = dict(data, id=100 + len(self.inbounds), sort_order=0)
+            self.inbounds.append(item)
+            return item
+        if method == "PUT" and path == "/api/nodes/2/inbounds/reorder":
+            self.writes.append(("reorder", [entry["id"] for entry in data]))
+            order = {entry["id"]: entry["sort_order"] for entry in data}
+            for item in self.inbounds:
+                item["sort_order"] = order[item["id"]]
+            return {}
+        if path in ("/api/nodes/2/generate", "/api/nodes/2/raw-config"):
+            return {"inbounds": [{"tag": item["tag"]} for item in self.inbounds]}
+        if "/users" in path or "/access" in path:
+            raise AssertionError("脚本不得触碰授权：" + path)
+        raise AssertionError((method, path))
+
+
+OUT = {"type": "shadowsocks", "server": "198.51.100.7", "server_port": 8443, "method": "m", "password": "k"}
+LINES = [{"name": "laxpro-Hy2-laxcg", "tag": "hysteria2-laxcg", "protocol": "hysteria2", "port": 8443, "outbound": OUT},
+         {"name": "laxpro-Reality-laxcg", "tag": "vless-reality-laxcg", "protocol": "vless-reality", "port": 8443, "outbound": OUT}]
+
+
+def original():
+    return [{"id": 27, "tag": "hysteria2", "name": "", "protocol": "hysteria2", "port": 443, "sort_order": 0},
+            {"id": 28, "tag": "vless-reality", "name": "", "protocol": "vless-reality", "port": 443, "sort_order": 0}]
+
+
+class EntryLinesTest(unittest.TestCase):
+    def test_new_lines_go_after_originals_in_fixed_order(self):
+        inbounds = original() + [{"id": 45, "tag": "vless-reality-laxcg", "sort_order": 0}, {"id": 44, "tag": "hysteria2-laxcg", "sort_order": 0}]
+        inbounds[0]["sort_order"] = 0
+        self.assertEqual(desired_order(inbounds, ["hysteria2-laxcg", "vless-reality-laxcg"]), [27, 28, 44, 45])
+
+    def test_apply_creates_reorders_and_never_touches_access(self):
+        panel = EntryPanel(original()[:1] + [{"id": 44, "tag": "hysteria2-laxcg", "name": "laxpro-Hy2-laxcg", "protocol": "hysteria2", "port": 8443, "outbound": dict(OUT), "sort_order": 0}] + original()[1:])
+        panel.inbounds[2]["sort_order"] = 5
+        results, extra = ensure_lines(panel, 2, LINES, apply=True)
+        self.assertEqual([item["action"] for item in results], ["reuse", "create"])
+        self.assertTrue(extra["reorder"])
+        order = [item["id"] for item in sorted(panel.inbounds, key=lambda item: (item["sort_order"], item["id"]))]
+        self.assertEqual([item["tag"] for item in sorted(panel.inbounds, key=lambda item: (item["sort_order"], item["id"]))],
+                         ["hysteria2", "vless-reality", "hysteria2-laxcg", "vless-reality-laxcg"], order)
+        # 再跑一次：全部复用，不再写入。
+        panel.writes.clear()
+        results, extra = ensure_lines(panel, 2, LINES, apply=True)
+        self.assertEqual(([item["action"] for item in results], extra["reorder"], panel.writes), (["reuse", "reuse"], False, []))
+
+    def test_preview_never_writes(self):
+        panel = EntryPanel(original())
+        results, _ = ensure_lines(panel, 2, LINES, apply=False)
+        self.assertEqual(([item["action"] for item in results], panel.writes), (["create", "create"], []))
+
+    def test_existing_line_with_different_config_is_refused(self):
+        panel = EntryPanel(original() + [{"id": 44, "tag": "hysteria2-laxcg", "name": "other", "protocol": "hysteria2", "port": 8443, "outbound": dict(OUT)}])
+        with self.assertRaises(RuntimeError):
+            ensure_lines(panel, 2, LINES, apply=False)
+
+    def test_outbound_network_empty_equals_missing(self):
+        self.assertTrue(same_outbound(dict(OUT), dict(OUT, network="")))
+        self.assertFalse(same_outbound(dict(OUT), dict(OUT, network="tcp")))
 
 
 if __name__ == "__main__":

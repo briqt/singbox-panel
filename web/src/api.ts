@@ -74,6 +74,8 @@ export interface Inbound {
   settings?: Record<string, unknown>
   outbound?: Outbound
   custom: boolean
+  // 该线路在订阅里的名字，由后端按订阅同一算法给出；落地/停用线路为空。
+  display_name?: string
 }
 
 export interface CreateInboundBody {

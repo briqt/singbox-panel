@@ -165,6 +165,7 @@ python3 scripts/provision_upstream.py --env-file /opt/singbox-panel/.env \
 把一台节点当作落地出口，其他节点各加入口线路、经 Shadowsocks 2022 转发过去。节点间链路不经过 GFW，不需要伪装，但必须加密并且承载 UDP，所以选 SS2022 而不选 SOCKS5 或 Reality。
 
 - **落地入站**：`protocol: "shadowsocks"`，只供节点之间使用：不进订阅、不按用户授权启停，由 SS2022 密钥和 `allowed_sources` 来源白名单共同把关。白名单之外的来源会被显式 `reject`（路由 final 是 direct，只写放行规则等于不设白名单）；白名单不能为空，也不能是 `0.0.0.0/0`。密钥由面板生成，`method` 和 `password` 不可修改，白名单可以调整。落地入站本身直接出网，不能再串接上游。
+- **展示名与订阅一致**：节点详情接口返回的 `display_name`，与订阅用的是同一个命名函数（`singbox.SubscriptionNames`），面板优先显示它；`TestSubscriptionNamesMatchSubscriptions` 守住这一点。
 - **入口线路**：普通的 `hysteria2` 或 `vless-reality` 自定义线路，`outbound` 设为 `{"type":"shadowsocks","server":<落地 IP>,"server_port":…,"method":…,"password":…}`。`network` 留空时 TCP 和 UDP 都走落地（Clash 条目 `udp: true`），设为 `tcp` 则 UDP 直接失败。自定义 hysteria2 线路如果省略 `settings`，会沿用节点默认 hysteria2 的域名、证书和混淆参数。
 - **落地不通就失败**：该入站的全部流量只路由到专属 SS 出口。落地宕机、密钥不符或来源被拒时，TCP 和 UDP 都直接失败，绝不改为从入口机直出。`TestCoreRelayLandingFailsClosed` 用真实内核证伪这一点：源站只监听回环，入口一旦直出就会被命中。
 - **限制**：自定义 hysteria2 复制的是创建时的域名和证书路径。默认线路如果经 auto-setup 迁移了域名，需要重建这条线路。
@@ -175,10 +176,12 @@ python3 scripts/provision_upstream.py --env-file /opt/singbox-panel/.env \
 python3 scripts/provision_relay.py --env-file /opt/singbox-panel/.env \
   --landing-node-id 8 --landing-server 198.51.100.7 --relay-port 8443 --suffix laxcg \
   --entry 1:2053:2053 --entry 2:8443:8443 \
-  --source 203.0.113.4 --source 203.0.113.5 --user-id 1
+  --source 203.0.113.4 --source 203.0.113.5
 ```
 
-`--entry` 的格式是 `节点ID:hysteria2端口:reality端口`；`--source` 填入口机连接落地时的真实源 IP。上线后应从真实客户端验证：经新线路访问时，出口 IP 是落地机；把入口机移出白名单后，该线路必须失败，不能变成直出。
+`--entry` 的格式是 `节点ID:hysteria2端口:reality端口`；`--source` 填入口机连接落地时的真实源 IP。新线路命名为"订阅名 + 后缀"（如 `laxpro-Hy2-laxcg`），排在该节点原有线路之后。脚本**不碰任何授权**：新线路在授权前不监听，由操作者在面板里授权给需要的用户。
+
+**时间同步是前提**：SS2022 会拒绝时间戳偏差超过约 30 秒的包。入口机时钟一旦偏了，它的落地线路会直接失败（按设计不会回落直连），落地机日志里表现为 `serve UDP ... bad`。机房屏蔽 UDP 123 时，NTP 永远同步不上，可改用基于 HTTP Date 头的 htpdate。上线后应从真实客户端验证：经新线路访问时，出口 IP 是落地机；把入口机移出白名单后，该线路必须失败，不能变成直出。
 
 回滚旧版本时必须同时恢复匹配的升级前数据库备份；不能仅换回旧二进制，因为旧版本只认识节点级权限。
 

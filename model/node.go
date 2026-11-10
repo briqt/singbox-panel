@@ -34,6 +34,8 @@ type NodeInbound struct {
 	Name      string          `json:"name"`
 	Outbound  *OutboundConfig `json:"outbound,omitempty"`
 	Custom    bool            `json:"custom"`
+	// DisplayName 是该线路在订阅里的名字，只在接口返回时填充，不落库。
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 type NodeWithInbounds struct {

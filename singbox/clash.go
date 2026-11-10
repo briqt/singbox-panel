@@ -82,6 +82,21 @@ func yamlProxyName(name string) string {
 	return strconv.Quote(name)
 }
 
+// SubscriptionNames 返回每条入站在订阅里的名字，算法与生成订阅完全相同，
+// 供面板展示：面板与订阅各写一套命名逻辑，迟早会显示成两个名字。
+// 不进订阅的入站（停用、落地）不返回。
+func SubscriptionNames(node model.Node, inbounds []model.NodeInbound) map[int]string {
+	names := protocolNameTracker{}
+	result := make(map[int]string, len(inbounds))
+	for _, ib := range inbounds {
+		if !ib.Enabled || ib.Protocol == RelayProtocol {
+			continue
+		}
+		result[ib.ID] = clashName(node, ib, names)
+	}
+	return result
+}
+
 func clashName(node model.Node, ib model.NodeInbound, names protocolNameTracker) string {
 	if ib.Name != "" {
 		return names.next(ib.Name)

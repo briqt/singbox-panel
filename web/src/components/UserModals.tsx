@@ -235,7 +235,7 @@ export function EditUserModal({
                 <Space direction="vertical" size={6} style={{ display: 'flex', marginTop: 6 }}>
                   {(node.inbounds ?? []).filter((inbound) => !isRelayInbound(inbound)).map((inbound) => (
                     <Checkbox key={inbound.id} value={inbound.id}>
-                      {inbound.name || inbound.tag}
+                      {inbound.display_name || inbound.name || inbound.tag}
                       <Text type="secondary" style={{ margin: '0 8px', fontSize: 12 }}>
                         {inbound.protocol} · {inbound.port} · {inbound.tag}
                       </Text>

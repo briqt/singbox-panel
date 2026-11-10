@@ -520,7 +520,7 @@ function NodeBody({
         columns={[
           {
             title: t('inboundName'),
-            render: (_, inbound) => <Text>{inbound.name || inbound.tag}</Text>,
+            render: (_, inbound) => <Text>{inbound.display_name || inbound.name || inbound.tag}</Text>,
           },
           {
             title: t('protocols'),
