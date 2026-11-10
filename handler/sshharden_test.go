@@ -102,7 +102,7 @@ func TestProbeUnreachableIsNotEvidence(t *testing.T) {
 }
 
 func TestIneffectiveSSHDByValue(t *testing.T) {
-	good := parseSSHDT("port 22\npasswordauthentication no\nkbdinteractiveauthentication no\npermitrootlogin without-password\n")
+	good := parseSSHDT("port 22\npubkeyauthentication yes\npasswordauthentication no\nkbdinteractiveauthentication no\npermitrootlogin without-password\n")
 	if bad := ineffectiveSSHD(good); len(bad) != 0 {
 		t.Fatalf("hardened output flagged: %v", bad)
 	}
@@ -110,10 +110,12 @@ func TestIneffectiveSSHDByValue(t *testing.T) {
 	// "no" is a prefix of nothing here, but "yes" vs "no" and a missing key are
 	// both what a stray earlier drop-in produces.
 	for _, broken := range []string{
-		"passwordauthentication yes\nkbdinteractiveauthentication no\npermitrootlogin without-password\n",
-		"passwordauthentication no\nkbdinteractiveauthentication yes\npermitrootlogin without-password\n",
-		"passwordauthentication no\nkbdinteractiveauthentication no\npermitrootlogin yes\n",
-		"passwordauthentication no\npermitrootlogin without-password\n",
+		"pubkeyauthentication yes\npasswordauthentication yes\nkbdinteractiveauthentication no\npermitrootlogin without-password\n",
+		"pubkeyauthentication yes\npasswordauthentication no\nkbdinteractiveauthentication yes\npermitrootlogin without-password\n",
+		"pubkeyauthentication yes\npasswordauthentication no\nkbdinteractiveauthentication no\npermitrootlogin yes\n",
+		"pubkeyauthentication yes\npasswordauthentication no\npermitrootlogin without-password\n",
+		// The laxcg image: keys off. Hardening must never be reported done here.
+		"pubkeyauthentication no\npasswordauthentication no\nkbdinteractiveauthentication no\npermitrootlogin without-password\n",
 	} {
 		if bad := ineffectiveSSHD(parseSSHDT(broken)); len(bad) != 1 {
 			t.Fatalf("expected exactly one ineffective key for %q, got %v", broken, bad)

@@ -141,6 +141,31 @@ printf '{"python":"%s","nft":"%s","nft_version":"%s","ss":"%s","ip":"%s","cgroup
   "$py" "$nft_ok" "${nft_ver:-}" "$ss_ok" "$ip_ok" "$cg" "${free:-0}"`
 }
 
+// InstallNFTScript installs the nft userspace tool on apt-based systems. Only the
+// CLI is needed: the collector loads its own table at runtime. The distro's
+// nftables.service stays disabled — its stock /etc/nftables.conf begins with
+// "flush ruleset", and starting it would wipe every other firewall rule — so
+// the script fails if installing the package left that service enabled.
+func InstallNFTScript() string {
+	return `set -eu
+command -v nft >/dev/null 2>&1 && { echo already; exit 0; }
+command -v apt-get >/dev/null 2>&1 || { echo "nft missing and no apt-get; install nftables manually" >&2; exit 2; }
+before=$(systemctl is-enabled nftables 2>/dev/null || echo absent)
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nftables >/dev/null 2>&1 || {
+  DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null 2>&1
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nftables >/dev/null
+}
+command -v nft >/dev/null 2>&1
+after=$(systemctl is-enabled nftables 2>/dev/null || echo absent)
+if [ "$after" = enabled ] && [ "$before" != enabled ]; then
+  systemctl disable nftables >/dev/null 2>&1
+  echo "installed; nftables.service was auto-enabled and has been disabled again (not started)"
+else
+  echo installed
+fi
+systemctl is-active --quiet nftables && { echo "nftables.service is active" >&2; exit 3; } || true`
+}
+
 // Preflight is the parsed PreflightScript output.
 type Preflight struct {
 	Python     string `json:"python"`

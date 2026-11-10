@@ -2,6 +2,7 @@ package nodeaudit
 
 import (
 	"encoding/json"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -91,5 +92,33 @@ func TestEmbeddedFilesAreTheCollector(t *testing.T) {
 	}
 	if len(ScriptSHA256()) != 64 {
 		t.Fatal("bad sha")
+	}
+}
+
+// Every script sent to a node must at least parse; a syntax error would only
+// surface on a production node otherwise.
+func TestRemoteScriptsParse(t *testing.T) {
+	for name, script := range map[string]string{
+		"preflight": PreflightScript(), "activate": ActivateScript(),
+		"uninstall": UninstallScript(), "install-nft": InstallNFTScript(),
+	} {
+		cmd := exec.Command("sh", "-n")
+		cmd.Stdin = strings.NewReader(script)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s does not parse: %v\n%s", name, err, out)
+		}
+	}
+}
+
+// The distro unit's config flushes the whole ruleset; installing the CLI must
+// never leave that service enabled or started.
+func TestInstallNFTNeverStartsDistroService(t *testing.T) {
+	s := InstallNFTScript()
+	if strings.Contains(s, "systemctl start nftables") || strings.Contains(s, "systemctl enable nftables") ||
+		strings.Contains(s, "enable --now nftables") {
+		t.Fatal("install script starts or enables nftables.service")
+	}
+	if !strings.Contains(s, "systemctl disable nftables") {
+		t.Fatal("install script does not undo an auto-enabled nftables.service")
 	}
 }

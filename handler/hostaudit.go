@@ -149,8 +149,19 @@ func (h *HostAuditHandler) Install(node *model.Node, iface string) (*AuditInstal
 	if err := json.Unmarshal([]byte(lastJSONLine(out)), &result.Preflight); err != nil {
 		return result, fmt.Errorf("preflight output unreadable: %w", err)
 	}
+	if result.Preflight.NFT != "yes" {
+		msg, err := sshRun(client, nodeaudit.InstallNFTScript())
+		if err != nil {
+			return result, fmt.Errorf("install nftables: %s", strings.TrimSpace(msg))
+		}
+		result.Warnings = append(result.Warnings, "nftables CLI "+strings.TrimSpace(msg))
+		out, err = sshRun(client, nodeaudit.PreflightScript())
+		if err != nil || json.Unmarshal([]byte(lastJSONLine(out)), &result.Preflight) != nil {
+			return result, fmt.Errorf("preflight after installing nftables failed: %s", strings.TrimSpace(out))
+		}
+	}
 	blockers, warnings := result.Preflight.Problems()
-	result.Warnings = warnings
+	result.Warnings = append(result.Warnings, warnings...)
 	if len(blockers) > 0 {
 		return result, &auditPreflightError{preflight: result.Preflight, blockers: blockers}
 	}

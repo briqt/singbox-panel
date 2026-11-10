@@ -30,7 +30,9 @@ import (
 const sshHardenDropIn = "/etc/ssh/sshd_config.d/00-00-singbox-panel.conf"
 
 const sshHardenContent = `# Managed by singbox-panel: public-key authentication only.
-# Remove this file and reload ssh to re-enable passwords.
+# To re-enable passwords, change these values and reload ssh. Do not simply
+# delete the file on images whose sshd_config disables public keys.
+PubkeyAuthentication yes
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin prohibit-password
@@ -39,6 +41,7 @@ PermitRootLogin prohibit-password
 // wantSSHD is the effective configuration a hardened node must report.
 // sshd -T prints prohibit-password under its legacy name.
 var wantSSHD = map[string][]string{
+	"pubkeyauthentication":         {"yes"},
 	"passwordauthentication":       {"no"},
 	"kbdinteractiveauthentication": {"no"},
 	"permitrootlogin":              {"without-password", "prohibit-password"},
@@ -185,11 +188,23 @@ func (h *NodeOpsHandler) HardenSSH(node *model.Node) (*SSHHardenResult, error) {
 	}
 
 	// 2. Write the drop-in, validate the whole configuration, then reload.
+	// Rollback restores the previous drop-in rather than deleting it: setup-ssh
+	// may have used this same file to turn public keys *on* (some images ship
+	// "PubkeyAuthentication no"), and deleting it would lock the panel out.
+	previous, hadPrevious := "", false
+	if out, err := sshRun(client, "cat "+sshHardenDropIn+" 2>/dev/null && echo __present__"); err == nil && strings.HasSuffix(strings.TrimSpace(out), "__present__") {
+		previous, hadPrevious = strings.TrimSuffix(strings.TrimSpace(out), "__present__"), true
+	}
 	if err := sshWriteFile(client, sshHardenDropIn, []byte(sshHardenContent)); err != nil {
 		return res, fmt.Errorf("write %s: %w", sshHardenDropIn, err)
 	}
 	restore := func() {
-		sshRun(client, "rm -f "+sshHardenDropIn+"; systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true")
+		if hadPrevious {
+			sshWriteFile(client, sshHardenDropIn, []byte(previous))
+		} else {
+			sshRun(client, "rm -f "+sshHardenDropIn)
+		}
+		sshRun(client, "systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true")
 	}
 	if out, err := sshRun(client, "chmod 0644 "+sshHardenDropIn+" && sshd -t 2>&1"); err != nil {
 		restore()
@@ -234,6 +249,37 @@ func (h *NodeOpsHandler) HardenSSH(node *model.Node) (*SSHHardenResult, error) {
 	h.clearStoredPassword(node)
 	res.Status = "hardened"
 	return res, nil
+}
+
+// ensurePubkeyEnabled turns public-key authentication on when the image ships
+// it off, over the (password) connection setup-ssh already holds. Without this
+// the injected key can never be used and "key-only" is impossible. It writes
+// the same panel drop-in that ssh-harden later completes, and reads back the
+// effective value instead of trusting the write.
+func ensurePubkeyEnabled(client *ssh.Client) (changed bool, err error) {
+	out, _ := sshRun(client, sshdEffectiveCmd)
+	if parseSSHDT(out)["pubkeyauthentication"] == "yes" {
+		return false, nil
+	}
+	existing, _ := sshRun(client, "cat "+sshHardenDropIn+" 2>/dev/null")
+	if strings.Contains(existing, "PasswordAuthentication no") {
+		return false, errors.New("public keys are disabled although the panel drop-in is hardened; refusing to guess")
+	}
+	content := "# Managed by singbox-panel: this image disabled public keys; setup-ssh enabled them.\nPubkeyAuthentication yes\n"
+	if err := sshWriteFile(client, sshHardenDropIn, []byte(content)); err != nil {
+		return false, fmt.Errorf("write %s: %w", sshHardenDropIn, err)
+	}
+	if out, err := sshRun(client, "chmod 0644 "+sshHardenDropIn+" && sshd -t 2>&1"); err != nil {
+		sshRun(client, "rm -f "+sshHardenDropIn)
+		return false, fmt.Errorf("sshd -t rejected enabling public keys: %s", strings.TrimSpace(out))
+	}
+	sshRun(client, `systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true`)
+	out, _ = sshRun(client, sshdEffectiveCmd)
+	if got := parseSSHDT(out)["pubkeyauthentication"]; got != "yes" {
+		src, _ := sshRun(client, `grep -RniE '^\s*(Include|Match|PubkeyAuthentication)\b' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/ 2>/dev/null | head -20`)
+		return true, fmt.Errorf("PubkeyAuthentication is still %q after the drop-in; an earlier line wins:\n%s", got, strings.TrimSpace(src))
+	}
+	return true, nil
 }
 
 func (h *NodeOpsHandler) clearStoredPassword(node *model.Node) {

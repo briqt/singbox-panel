@@ -245,7 +245,8 @@ become stale.
 - `POST /api/nodes/{id}/setup-ssh` — inject the panel SSH key using a one-time
   root password. The password connection pins the host key (TOFU) like every
   other connection, the password is **not stored**, and success means a
-  key-only login was verified.
+  key-only login was verified. Images that ship `PubkeyAuthentication no` get
+  it enabled through the panel's sshd drop-in, read back with `sshd -T`.
 - `POST /api/nodes/{id}/ssh-harden` — public-key-only SSH (`PasswordAuthentication no`,
   `KbdInteractiveAuthentication no`, `PermitRootLogin prohibit-password`). Refuses
   unless the panel key works on its own; reads back `sshd -T`, then asks the
@@ -312,8 +313,9 @@ out, plus Caddy, DERP, SSH, package updates and everything else on the box.
 
 - `POST /api/nodes/{id}/traffic-audit` — install or upgrade the collector
   (`{"interface":"eth0"}` optional; auto-detected from the IPv4/IPv6 default
-  routes). Preflight blocks on python3 < 3.9, missing nft/iproute2, or less than
-  1 GiB free. Success is read back: one real sample taken, timer active, and
+  routes). Preflight blocks on python3 < 3.9, missing iproute2, or less than
+  1 GiB free; a missing `nft` CLI is installed via apt (`nftables.service` is
+  kept disabled — its stock config flushes the whole ruleset). Success is read back: one real sample taken, timer active, and
   sing-box's MainPID unchanged. auto-setup runs this as its last, non-fatal step.
 - `GET /api/nodes/{id}/traffic-audit` — collector health (`healthy`, last sample
   age, pending error, whether it runs this panel's version)

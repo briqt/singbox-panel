@@ -420,6 +420,14 @@ func (h *NodeOpsHandler) setupSSH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Some images ship "PubkeyAuthentication no"; the injected key is useless
+	// until that changes.
+	pubkeyEnabled, err := ensurePubkeyEnabled(client)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"status": "key_injected_but_pubkey_disabled", "node": node.Name, "error": err.Error()})
+		return
+	}
+
 	// Verify with the key alone; a stored password must not mask a broken key.
 	verifyClient, err := h.Config.sshConnectKeyOnly(node)
 	if err != nil {
@@ -429,5 +437,5 @@ func (h *NodeOpsHandler) setupSSH(w http.ResponseWriter, r *http.Request) {
 	verifyClient.Close()
 	h.clearStoredPassword(node)
 
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "node": node.Name, "message": "SSH key auth configured successfully"})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "node": node.Name, "pubkey_auth_enabled_by_panel": pubkeyEnabled, "message": "SSH key auth configured successfully"})
 }
