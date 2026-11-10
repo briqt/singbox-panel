@@ -182,3 +182,30 @@ func TestInboundAccessSchemaEnforcesUniqueAndForeignKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestOrphanInboundMigrationRemovesOnlyDeadReferences(t *testing.T) {
+	database, _ := legacyAccessDatabase(t)
+	for _, statement := range []string{
+		// Node 9 was deleted by an old panel: only its row went away.
+		`INSERT INTO node_inbounds (id, node_id, protocol, port, enabled) VALUES (90, 9, 'vless', 1000, 1)`,
+		`INSERT INTO user_access (user_id, node_id) VALUES (1, 9)`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := migrate(database); err != nil {
+		t.Fatal(err)
+	}
+	var orphanInbounds, orphanGrants, legacyOrphans, liveGrants int
+	database.QueryRow(`SELECT COUNT(*) FROM node_inbounds WHERE node_id = 9`).Scan(&orphanInbounds)
+	database.QueryRow(`SELECT COUNT(*) FROM user_inbound_access WHERE inbound_id = 90`).Scan(&orphanGrants)
+	database.QueryRow(`SELECT COUNT(*) FROM user_access WHERE node_id = 9`).Scan(&legacyOrphans)
+	database.QueryRow(`SELECT COUNT(*) FROM user_inbound_access WHERE inbound_id IN (10, 11)`).Scan(&liveGrants)
+	if orphanInbounds != 0 || orphanGrants != 0 || legacyOrphans != 0 {
+		t.Fatalf("orphans left: inbounds=%d grants=%d legacy=%d", orphanInbounds, orphanGrants, legacyOrphans)
+	}
+	if liveGrants != 2 {
+		t.Fatalf("grants on live inbounds must survive, got %d", liveGrants)
+	}
+}

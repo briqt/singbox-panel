@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -184,9 +186,16 @@ func (h *ConfigHandler) syncNode(nodeID int) NodeSyncResult {
 
 	result := NodeSyncResult{NodeID: nodeID}
 	node, err := h.Nodes.Get(nodeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		// A deleted node has no configuration left to push. Grants that still
+		// point at its inbounds (left behind by older panel versions) must not
+		// make every later edit of those users fail and roll back.
+		result.Status = "gone"
+		return result
+	}
 	if err != nil {
 		result.Status = "error"
-		result.Error = "node not found"
+		result.Error = "read node: " + err.Error()
 		return result
 	}
 	result.Node = node.Name

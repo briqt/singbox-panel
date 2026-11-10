@@ -27,6 +27,11 @@ func Open(dataDir string) (*sql.DB, error) {
 
 const inboundAccessMigration = "user_inbound_access_v1"
 
+// Older panels deleted a node row without its inbounds. The v1 access migration
+// then copied node grants onto those orphaned inbounds, and every edit of an
+// affected user tried to sync the vanished node and rolled back.
+const orphanInboundsMigration = "orphan_inbounds_v1"
+
 func migrate(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -73,6 +78,24 @@ func migrate(db *sql.DB) error {
 		}
 		if _, err := tx.Exec(`INSERT INTO schema_migrations (name) VALUES (?)`, inboundAccessMigration); err != nil {
 			return fmt.Errorf("mark inbound access migration: %w", err)
+		}
+	}
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE name = ?`, orphanInboundsMigration).Scan(&migrated); err != nil {
+		return err
+	}
+	if migrated == 0 {
+		for _, stmt := range []string{
+			`DELETE FROM user_inbound_access WHERE inbound_id IN (SELECT id FROM node_inbounds WHERE node_id NOT IN (SELECT id FROM nodes))`,
+			`DELETE FROM user_inbound_access WHERE inbound_id NOT IN (SELECT id FROM node_inbounds)`,
+			`DELETE FROM node_inbounds WHERE node_id NOT IN (SELECT id FROM nodes)`,
+			`DELETE FROM user_access WHERE node_id NOT IN (SELECT id FROM nodes)`,
+		} {
+			if _, err := tx.Exec(stmt); err != nil {
+				return fmt.Errorf("clean orphan inbounds: %w", err)
+			}
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_migrations (name) VALUES (?)`, orphanInboundsMigration); err != nil {
+			return fmt.Errorf("mark orphan inbounds migration: %w", err)
 		}
 	}
 	return tx.Commit()

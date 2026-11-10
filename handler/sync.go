@@ -68,7 +68,7 @@ func syncNodes(syncer NodeSynchronizer, nodeIDs []int) []NodeSyncResult {
 func syncFailure(results []NodeSyncResult) error {
 	var failures []string
 	for _, result := range results {
-		if result.Status != "pushed" {
+		if result.Status != "pushed" && result.Status != "gone" {
 			node := result.Node
 			if node == "" {
 				node = fmt.Sprintf("#%d", result.NodeID)
