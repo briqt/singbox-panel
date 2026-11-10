@@ -4,6 +4,7 @@ import {
   ArrowDownOutlined,
   ArrowUpOutlined,
   DeleteOutlined,
+  EditOutlined,
   PlusOutlined,
   ReloadOutlined,
 } from '@ant-design/icons'
@@ -15,7 +16,7 @@ import { EmptyState, Mono, PageHeader } from '../ui'
 import { NODE_HEALTH_COLOR } from '../theme'
 import { fmtBytes, fmtClock, fmtUptime } from '../format'
 import { CERT_WARN_DAYS, healthLabel, healthState } from '../nodeHealth'
-import { AutoSetupModal, CertUploadModal, ConfigModal, CreateNodeModal, SetupSSHModal } from '../components/NodeModals'
+import { AutoSetupModal, CertUploadModal, ConfigModal, CreateNodeModal, InboundModal, SetupSSHModal } from '../components/NodeModals'
 
 const { Text } = Typography
 
@@ -36,6 +37,7 @@ export default function Nodes() {
   const [sshNode, setSSHNode] = useState<Node | null>(null)
   const [certNode, setCertNode] = useState<Node | null>(null)
   const [setupNode, setSetupNode] = useState<Node | null>(null)
+  const [inboundTarget, setInboundTarget] = useState<{ node: Node; inbound?: Inbound } | null>(null)
   const [config, setConfig] = useState<{ title: string; content: string } | null>(null)
 
   const loadNodes = useCallback(async () => {
@@ -329,6 +331,8 @@ export default function Nodes() {
                   onPreview={() => showConfig(node, 'preview')}
                   onRaw={() => showConfig(node, 'raw')}
                   onDelete={() => removeNode(node)}
+                  onCreateInbound={() => setInboundTarget({ node })}
+                  onEditInbound={(inbound) => setInboundTarget({ node, inbound })}
                   onMoveInbound={(inbound, delta) => moveInbound(node.id, inbound, delta)}
                   onDeleteInbound={(inbound) => removeInbound(node.id, inbound)}
                 />
@@ -350,6 +354,17 @@ export default function Nodes() {
           if (setupNode) loadDetail(setupNode.id).catch(toast.err)
         }}
       />
+      {inboundTarget && (
+        <InboundModal
+          node={inboundTarget.node}
+          inbound={inboundTarget.inbound}
+          onClose={() => setInboundTarget(null)}
+          onSaved={() => {
+            loadDetail(inboundTarget.node.id).catch(toast.err)
+            checkStatus(inboundTarget.node)
+          }}
+        />
+      )}
       <ConfigModal title={config?.title ?? ''} content={config?.content ?? null} onClose={() => setConfig(null)} />
     </>
   )
@@ -370,6 +385,8 @@ function NodeBody({
   onPreview,
   onRaw,
   onDelete,
+  onCreateInbound,
+  onEditInbound,
   onMoveInbound,
   onDeleteInbound,
 }: {
@@ -387,6 +404,8 @@ function NodeBody({
   onPreview: () => void
   onRaw: () => void
   onDelete: () => void
+  onCreateInbound: () => void
+  onEditInbound: (inbound: Inbound) => void
   onMoveInbound: (inbound: Inbound, delta: number) => void
   onDeleteInbound: (inbound: Inbound) => void
 }) {
@@ -484,19 +503,41 @@ function NodeBody({
         </Text>
       )}
 
+      <Space wrap style={{ marginBottom: 12 }}>
+        <Button size="small" icon={<PlusOutlined />} disabled={!detail} onClick={onCreateInbound}>
+          {t('newInbound')}
+        </Button>
+        <Text type="secondary" style={{ fontSize: 12 }}>{t('newInboundAccessHint')}</Text>
+      </Space>
       <Table
         size="small"
         rowKey="id"
         dataSource={inbounds}
+        loading={!detail}
+        scroll={{ x: 900 }}
         pagination={false}
         locale={{ emptyText: <EmptyState description={t('noInbounds')} /> }}
         columns={[
+          {
+            title: t('inboundName'),
+            render: (_, inbound) => <Text>{inbound.name || inbound.tag}</Text>,
+          },
           {
             title: t('protocols'),
             dataIndex: 'protocol',
             render: (protocol: string) => <Tag color="blue">{protocol}</Tag>,
           },
-          { title: 'Port', dataIndex: 'port', width: 100, render: (port: number) => <Mono>{port}</Mono> },
+          { title: t('inboundPort'), dataIndex: 'port', width: 90, render: (port: number) => <Mono>{port}</Mono> },
+          {
+            title: t('egress'),
+            render: (_, inbound) => (
+              <Tag color={inbound.outbound ? 'purple' : 'default'}>
+                {inbound.outbound
+                  ? `SOCKS5 · ${inbound.outbound.server}:${inbound.outbound.server_port}`
+                  : t('egressDirect')}
+              </Tag>
+            ),
+          },
           {
             title: t('listening'),
             width: 130,
@@ -531,13 +572,16 @@ function NodeBody({
               )
             },
           },
-          { title: 'Tag', dataIndex: 'tag', render: (tag: string) => <Mono>{tag}</Mono> },
+          { title: t('inboundTag'), dataIndex: 'tag', render: (tag: string) => <Mono>{tag}</Mono> },
           {
             title: t('actions'),
-            width: 130,
+            width: 150,
             align: 'right',
             render: (_, inbound, index) => (
               <Space size={0}>
+                <Tooltip title={t('editInbound')}>
+                  <Button size="small" type="text" icon={<EditOutlined />} aria-label={t('editInbound')} onClick={() => onEditInbound(inbound)} />
+                </Tooltip>
                 <Button
                   size="small"
                   type="text"

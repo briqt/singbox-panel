@@ -64,6 +64,27 @@ func (e *handlerTestEnv) createNode(t *testing.T, name string) *model.Node {
 	return node
 }
 
+// 授权测试必须创建真实入站：给空节点授权不能产生供未来入站继承的权限。
+// 保持 createNode 的行为不变，因为节点和纳管测试也用它创建刻意留空的节点。
+func (e *handlerTestEnv) createAccessNode(t *testing.T, name string) *model.Node {
+	t.Helper()
+	node := e.createNode(t, name)
+	e.createAccessInbound(t, node.ID, "vless-reality", 443)
+	return node
+}
+
+func (e *handlerTestEnv) createAccessInbound(t *testing.T, nodeID int, protocol string, port int) *model.NodeInbound {
+	t.Helper()
+	settings := json.RawMessage(`{"sni":"example.com","public_key":"public-key","private_key":"private-key","short_id":"abcd","domain":"example.com"}`)
+	inbound, err := e.nodes.CreateInbound(nodeID, model.CreateInboundReq{
+		Tag: protocol, Protocol: protocol, Port: port, Settings: settings,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inbound
+}
+
 func performJSONRequest(t *testing.T, handler http.Handler, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	payload, err := json.Marshal(body)
@@ -79,8 +100,8 @@ func performJSONRequest(t *testing.T, handler http.Handler, method, path string,
 
 func TestCombinedUserEditUpdatesAccessAndSyncsAffectedNodes(t *testing.T) {
 	env := newHandlerTestEnv(t)
-	node1 := env.createNode(t, "node-1")
-	node2 := env.createNode(t, "node-2")
+	node1 := env.createAccessNode(t, "node-1")
+	node2 := env.createAccessNode(t, "node-2")
 	user, err := env.users.CreateWithPassword("new-user", "hash")
 	if err != nil {
 		t.Fatal(err)
@@ -125,14 +146,14 @@ func TestCombinedUserEditUpdatesAccessAndSyncsAffectedNodes(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("retry same edit: status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if !reflect.DeepEqual(env.syncer.calls[2], []int{node2.ID}) {
-		t.Fatalf("save and sync must allow retrying unchanged assignments, got %#v", env.syncer.calls[2])
+	if len(env.syncer.calls) != 2 {
+		t.Fatalf("unchanged properties and assignments must not restart nodes: %#v", env.syncer.calls)
 	}
 }
 
 func TestStandaloneAccessChangesSyncAfterUserAlreadyEnabled(t *testing.T) {
 	env := newHandlerTestEnv(t)
-	node := env.createNode(t, "node-1")
+	node := env.createAccessNode(t, "node-1")
 	user, err := env.users.CreateWithPassword("new-user", "hash")
 	if err != nil {
 		t.Fatal(err)
@@ -192,7 +213,7 @@ func TestCombinedUserEditIsAtomicWhenNodeIsInvalid(t *testing.T) {
 
 func TestCombinedUserEditRollsBackWhenNodeSyncFails(t *testing.T) {
 	env := newHandlerTestEnv(t)
-	node := env.createNode(t, "node-1")
+	node := env.createAccessNode(t, "node-1")
 	user, err := env.users.CreateWithPassword("new-user", "hash")
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +243,7 @@ func TestCombinedUserEditRollsBackWhenNodeSyncFails(t *testing.T) {
 
 func TestStandaloneAccessRollsBackWhenNodeSyncFails(t *testing.T) {
 	env := newHandlerTestEnv(t)
-	node := env.createNode(t, "node-1")
+	node := env.createAccessNode(t, "node-1")
 	user, err := env.users.CreateWithPassword("new-user", "hash")
 	if err != nil {
 		t.Fatal(err)
@@ -244,7 +265,7 @@ func TestStandaloneAccessRollsBackWhenNodeSyncFails(t *testing.T) {
 
 func TestDeleteUserRollsBackWhenNodeSyncFails(t *testing.T) {
 	env := newHandlerTestEnv(t)
-	node := env.createNode(t, "node-1")
+	node := env.createAccessNode(t, "node-1")
 	user, err := env.users.CreateWithPassword("new-user", "hash")
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +293,7 @@ func TestDeleteUserRollsBackWhenNodeSyncFails(t *testing.T) {
 
 func TestResetTrafficRollsBackWhenNodeSyncFails(t *testing.T) {
 	env := newHandlerTestEnv(t)
-	node := env.createNode(t, "node-1")
+	node := env.createAccessNode(t, "node-1")
 	user, err := env.users.CreateWithPassword("new-user", "hash")
 	if err != nil {
 		t.Fatal(err)

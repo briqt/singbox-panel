@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -24,20 +25,90 @@ func Open(dataDir string) (*sql.DB, error) {
 	return db, nil
 }
 
+const inboundAccessMigration = "user_inbound_access_v1"
+
 func migrate(db *sql.DB) error {
-	if _, err := db.Exec(schema); err != nil {
+	tx, err := db.Begin()
+	if err != nil {
 		return err
 	}
-	db.Exec(`ALTER TABLE nodes ADD COLUMN domain TEXT NOT NULL DEFAULT ''`)
-	db.Exec(`ALTER TABLE users ADD COLUMN password TEXT NOT NULL DEFAULT ''`)
-	db.Exec(`ALTER TABLE nodes ADD COLUMN ssh_password TEXT NOT NULL DEFAULT ''`)
-	db.Exec(`ALTER TABLE users ADD COLUMN traffic_reset_day INTEGER NOT NULL DEFAULT 0`)
-	db.Exec(`ALTER TABLE users ADD COLUMN traffic_last_reset TEXT NOT NULL DEFAULT ''`)
-	db.Exec(`ALTER TABLE nodes ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`)
-	db.Exec(`ALTER TABLE node_inbounds ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`)
-	db.Exec(`ALTER TABLE users ADD COLUMN traffic_up_bytes INTEGER NOT NULL DEFAULT 0`)
-	db.Exec(`ALTER TABLE users ADD COLUMN traffic_down_bytes INTEGER NOT NULL DEFAULT 0`)
-	db.Exec(`ALTER TABLE users ADD COLUMN note TEXT NOT NULL DEFAULT ''`)
+	defer tx.Rollback()
+	if _, err := tx.Exec(schema); err != nil {
+		return err
+	}
+	for _, column := range []struct {
+		table, name, definition string
+	}{
+		{"nodes", "domain", "TEXT NOT NULL DEFAULT ''"},
+		{"users", "password", "TEXT NOT NULL DEFAULT ''"},
+		{"nodes", "ssh_password", "TEXT NOT NULL DEFAULT ''"},
+		{"users", "traffic_reset_day", "INTEGER NOT NULL DEFAULT 0"},
+		{"users", "traffic_last_reset", "TEXT NOT NULL DEFAULT ''"},
+		{"nodes", "sort_order", "INTEGER NOT NULL DEFAULT 0"},
+		{"node_inbounds", "sort_order", "INTEGER NOT NULL DEFAULT 0"},
+		{"users", "traffic_up_bytes", "INTEGER NOT NULL DEFAULT 0"},
+		{"users", "traffic_down_bytes", "INTEGER NOT NULL DEFAULT 0"},
+		{"users", "note", "TEXT NOT NULL DEFAULT ''"},
+		{"node_inbounds", "name", "TEXT NOT NULL DEFAULT ''"},
+		{"node_inbounds", "outbound", "TEXT NOT NULL DEFAULT '{}'"},
+		{"node_inbounds", "custom", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := addColumnIfMissing(tx, column.table, column.name, column.definition); err != nil {
+			return err
+		}
+	}
+
+	var migrated int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE name = ?`, inboundAccessMigration).Scan(&migrated); err != nil {
+		return err
+	}
+	if migrated == 0 {
+		// 仅迁移一次当前入站的授权快照，包含已禁用的入站。此后不得读取
+		// user_access 补授权，否则会复活已撤销的权限，或把权限静默授予未来新建的入站。
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO user_inbound_access (user_id, inbound_id)
+			SELECT ua.user_id, ib.id FROM user_access ua
+			JOIN users u ON u.id = ua.user_id
+			JOIN node_inbounds ib ON ib.node_id = ua.node_id`); err != nil {
+			return fmt.Errorf("migrate inbound access: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_migrations (name) VALUES (?)`, inboundAccessMigration); err != nil {
+			return fmt.Errorf("mark inbound access migration: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// 先检查表结构，而不是忽略 ALTER 的错误：重启时列已存在属于正常情况，
+// 数据库只读或其他迁移失败则必须报错。
+func addColumnIfMissing(tx *sql.Tx, table, name, definition string) error {
+	rows, err := tx.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var columnName, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		found = found || columnName == name
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	if _, err := tx.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + name + ` ` + definition); err != nil {
+		return fmt.Errorf("add %s.%s: %w", table, name, err)
+	}
 	return nil
 }
 
@@ -103,5 +174,19 @@ CREATE TABLE IF NOT EXISTS user_access (
 	UNIQUE(user_id, node_id),
 	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
 	FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS user_inbound_access (
+	user_id INTEGER NOT NULL,
+	inbound_id INTEGER NOT NULL,
+	UNIQUE(user_id, inbound_id),
+	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+	FOREIGN KEY (inbound_id) REFERENCES node_inbounds(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_user_inbound_access_inbound ON user_inbound_access(inbound_id);
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+	name TEXT PRIMARY KEY,
+	applied_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 `

@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"testing"
 
@@ -113,6 +114,104 @@ func TestRealityTargetRejectsBadInputBeforeAnySSH(t *testing.T) {
 	}
 	if !contains(rec.Body.String(), "vless-reality") {
 		t.Fatalf("error does not name the missing protocol: %s", rec.Body.String())
+	}
+}
+
+func TestRealitySelectionProtectsCustomLinesAndRequiresUniqueDefault(t *testing.T) {
+	custom := model.NodeInbound{ID: 1, NodeID: 7, Protocol: "vless-reality", Custom: true}
+	managed := model.NodeInbound{ID: 2, NodeID: 7, Protocol: "vless-reality"}
+	inbounds := []model.NodeInbound{custom, managed}
+	target, err := selectRealityInbound(inbounds, 0)
+	if err != nil || target == nil || target.ID != managed.ID {
+		t.Fatalf("implicit selection adopted custom line: target=%#v err=%v", target, err)
+	}
+	target, err = selectRealityInbound(inbounds, custom.ID)
+	if err != nil || target == nil || target.ID != custom.ID {
+		t.Fatalf("explicit ID did not select custom line: target=%#v err=%v", target, err)
+	}
+	target, err = selectRealityInbound([]model.NodeInbound{custom}, 0)
+	if err != nil || target != nil {
+		t.Fatalf("custom-only node must not have an implicit default: target=%#v err=%v", target, err)
+	}
+	ambiguous := append(inbounds, model.NodeInbound{ID: 3, Protocol: "vless-reality"})
+	if _, err := selectRealityInbound(ambiguous, 0); err == nil {
+		t.Fatal("multiple non-custom Reality lines were silently resolved to the first")
+	}
+	if _, err := selectRealityInbound(inbounds, 999); err == nil {
+		t.Fatal("an explicit foreign/missing ID fell back to the default")
+	}
+	wrongProtocol := append(inbounds, model.NodeInbound{ID: 4, Protocol: "hysteria2"})
+	if _, err := selectRealityInbound(wrongProtocol, 4); err == nil {
+		t.Fatal("a non-Reality inbound was selected for retargeting")
+	}
+}
+
+func TestRealityTargetDoesNotImplicitlyModifyCustomLine(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	node := env.createNode(t, "node-1")
+	createTestCustomReality(t, env, node.ID)
+	// 将 Config 置空，确保误入 SSH 路径时直接失败，避免测试假阳性。
+	ops := &NodeOpsHandler{Nodes: env.nodes}
+	rec := performJSONRequest(t, http.HandlerFunc(ops.HandleRealityTarget), http.MethodPost,
+		"/api/nodes/"+strconv.Itoa(node.ID)+"/reality-target", map[string]any{"sni": "www.bing.com"})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRealityEndpointsRejectAmbiguousOrForeignSelectionBeforeSSH(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	node := env.createNode(t, "node-1")
+	other := env.createNode(t, "node-2")
+	foreign := createTestCustomReality(t, env, other.ID)
+	for i, port := range []int{443, 2053} {
+		if _, err := env.nodes.CreateInbound(node.ID, model.CreateInboundReq{
+			Tag: "default-" + strconv.Itoa(i), Protocol: "vless-reality", Port: port, Settings: json.RawMessage(`{}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ops := &NodeOpsHandler{Nodes: env.nodes}
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		path := "/api/nodes/" + strconv.Itoa(node.ID) + "/reality-target"
+		handler := http.HandlerFunc(ops.HandleRealityTarget)
+		if method == http.MethodGet {
+			path += "s"
+			handler = ops.HandleRealityTargets
+		}
+		for _, suffix := range []string{"", "?inbound_id=" + strconv.Itoa(foreign.ID)} {
+			rec := performJSONRequest(t, handler, method, path+suffix, map[string]any{"sni": "www.bing.com"})
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("method=%s suffix=%s status=%d body=%s", method, suffix, rec.Code, rec.Body.String())
+			}
+		}
+	}
+}
+
+func TestRealityInboundIDAcceptsBodyOrQueryButNeverInvalidFallback(t *testing.T) {
+	id := 12
+	for _, tt := range []struct {
+		query string
+		body  *int
+		want  int
+		bad   bool
+	}{
+		{want: 0},
+		{body: &id, want: id},
+		{query: "?inbound_id=12", want: id},
+		{query: "?inbound_id=12", body: &id, want: id},
+		{query: "?inbound_id=13", body: &id, bad: true},
+		{query: "?inbound_id=garbage", bad: true},
+		{query: "?inbound_id=0", bad: true},
+		{query: "?inbound_id=-1", bad: true},
+		{query: "?inbound_id=", bad: true},
+		{query: "?inbound_id=12&inbound_id=13", bad: true},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/api/nodes/1/reality-targets"+tt.query, nil)
+		got, err := requestedRealityInboundID(req, tt.body)
+		if (err != nil) != tt.bad || (!tt.bad && got != tt.want) {
+			t.Fatalf("query=%q body=%v got=%d err=%v", tt.query, tt.body, got, err)
+		}
 	}
 }
 

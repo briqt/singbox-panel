@@ -211,15 +211,27 @@ func (h *MeHandler) HandleMyNodes(w http.ResponseWriter, r *http.Request) {
 	userID, _ := r.Context().Value(ctxUserID).(int)
 	role, _ := r.Context().Value(ctxRole).(string)
 	if role == "admin" {
-		nodes, _ := h.Nodes.List()
+		nodes, err := h.Nodes.List()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		writeJSON(w, http.StatusOK, nodes)
 		return
 	}
-	nodeIDs, _ := h.Access.ListNodeIDs(userID)
-	var nodes []map[string]any
+	nodeIDs, err := h.Access.ListNodeIDs(userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	nodes := []map[string]any{}
 	for _, nid := range nodeIDs {
 		n, err := h.Nodes.Get(nid)
-		if err != nil || !n.Enabled {
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !n.Enabled {
 			continue
 		}
 		nodes = append(nodes, map[string]any{
@@ -229,7 +241,7 @@ func (h *MeHandler) HandleMyNodes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, nodes)
 }
 
-// AccessHandler (admin-only, unchanged)
+// AccessHandler 管理精确到入站的授权，旧节点授权请求只生成当前入站的快照。
 
 type AccessHandler struct {
 	Access *model.AccessStore
@@ -259,24 +271,41 @@ func (h *AccessHandler) listAccess(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
-	nodeIDs, err := h.Access.ListNodeIDs(userID)
+	inboundIDs, err := h.Access.ListInboundIDs(userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	var nodes []model.Node
-	for _, nid := range nodeIDs {
-		n, err := h.Nodes.Get(nid)
-		if err == nil {
-			nodes = append(nodes, *n)
+	inbounds := []model.NodeInbound{}
+	for _, id := range inboundIDs {
+		inbound, err := h.Nodes.GetInbound(id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
 		}
+		inbounds = append(inbounds, *inbound)
 	}
-	writeJSON(w, http.StatusOK, nodes)
+	writeJSON(w, http.StatusOK, inbounds)
 }
 
 type AccessReq struct {
-	NodeID int  `json:"node_id"`
-	All    bool `json:"all"`
+	NodeID    int  `json:"node_id"`
+	InboundID int  `json:"inbound_id"`
+	All       bool `json:"all"`
+}
+
+func (req AccessReq) valid() bool {
+	choices := 0
+	if req.All {
+		choices++
+	}
+	if req.NodeID != 0 {
+		choices++
+	}
+	if req.InboundID != 0 {
+		choices++
+	}
+	return choices == 1 && req.NodeID >= 0 && req.InboundID >= 0
 }
 
 func (h *AccessHandler) grantAccess(w http.ResponseWriter, r *http.Request) {
@@ -290,30 +319,28 @@ func (h *AccessHandler) grantAccess(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	before, err := h.Access.ListNodeIDs(userID)
+	before, err := h.Access.ListInboundIDs(userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if req.All {
-		err = h.Access.GrantAll(userID)
-	} else if req.NodeID > 0 {
-		err = h.Access.Grant(userID, req.NodeID)
-	} else {
-		writeError(w, http.StatusBadRequest, "specify node_id or all:true")
+	if !req.valid() {
+		writeError(w, http.StatusBadRequest, "specify exactly one of inbound_id, node_id or all:true")
 		return
+	}
+	switch {
+	case req.All:
+		err = h.Access.GrantAll(userID)
+	case req.InboundID > 0:
+		err = h.Access.GrantInbound(userID, req.InboundID)
+	default:
+		err = h.Access.Grant(userID, req.NodeID)
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	nodeIDs, err := h.Access.ListNodeIDs(userID)
-	if err != nil {
-		h.Access.Replace(userID, before)
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.completeAccessChange(w, userID, before, nodeIDs)
+	h.finishAccessChange(w, userID, before)
 }
 
 func (h *AccessHandler) revokeAccess(w http.ResponseWriter, r *http.Request) {
@@ -327,30 +354,28 @@ func (h *AccessHandler) revokeAccess(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	before, err := h.Access.ListNodeIDs(userID)
+	before, err := h.Access.ListInboundIDs(userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if req.All {
+	if !req.valid() {
+		writeError(w, http.StatusBadRequest, "specify exactly one of inbound_id, node_id or all:true")
+		return
+	}
+	switch {
+	case req.All:
 		err = h.Access.RevokeAll(userID)
-	} else if req.NodeID > 0 {
+	case req.InboundID > 0:
+		err = h.Access.RevokeInbound(userID, req.InboundID)
+	default:
 		err = h.Access.Revoke(userID, req.NodeID)
-	} else {
-		writeError(w, http.StatusBadRequest, "specify node_id or all:true")
-		return
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	nodeIDs, err := h.Access.ListNodeIDs(userID)
-	if err != nil {
-		h.Access.Replace(userID, before)
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.completeAccessChange(w, userID, before, nodeIDs)
+	h.finishAccessChange(w, userID, before)
 }
 
 func (h *AccessHandler) replaceAccess(w http.ResponseWriter, r *http.Request) {
@@ -360,35 +385,67 @@ func (h *AccessHandler) replaceAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		NodeIDs []int `json:"node_ids"`
+		NodeIDs    *[]int `json:"node_ids"`
+		InboundIDs *[]int `json:"inbound_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	before, err := h.Access.ListNodeIDs(userID)
+	if (req.NodeIDs == nil) == (req.InboundIDs == nil) {
+		writeError(w, http.StatusBadRequest, "specify inbound_ids or node_ids, not both")
+		return
+	}
+	before, err := h.Access.ListInboundIDs(userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := h.Access.Replace(userID, req.NodeIDs); err != nil {
+	if req.InboundIDs != nil {
+		err = h.Access.ReplaceInbounds(userID, *req.InboundIDs)
+	} else {
+		err = h.Access.Replace(userID, *req.NodeIDs)
+	}
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	nodeIDs, err := h.Access.ListNodeIDs(userID)
-	if err != nil {
-		h.Access.Replace(userID, before)
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.completeAccessChange(w, userID, before, nodeIDs)
+	h.finishAccessChange(w, userID, before)
 }
 
+func (h *AccessHandler) finishAccessChange(w http.ResponseWriter, userID int, before []int) {
+	after, err := h.Access.ListInboundIDs(userID)
+	if err != nil {
+		h.rollbackAccessReadError(w, userID, before, err)
+		return
+	}
+	h.completeAccessChange(w, userID, before, after)
+}
+
+func (h *AccessHandler) rollbackAccessReadError(w http.ResponseWriter, userID int, before []int, err error) {
+	if rollbackErr := h.Access.ReplaceInbounds(userID, before); rollbackErr != nil {
+		writeError(w, http.StatusInternalServerError, "read access failed and access rollback failed: "+rollbackErr.Error())
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err.Error())
+}
+
+// before 和 after 是精确的入站 ID，不是节点 ID。
+// 即使仅在同一节点的两个协议之间切换授权，也必须同步该节点。
 func (h *AccessHandler) completeAccessChange(w http.ResponseWriter, userID int, before, after []int) {
-	targetNodeIDs := changedIDs(before, after)
+	targetNodeIDs, err := h.Access.NodeIDsForInbounds(changedIDs(before, after))
+	if err != nil {
+		h.rollbackAccessReadError(w, userID, before, err)
+		return
+	}
+	afterNodeIDs, err := h.Access.NodeIDsForInbounds(after)
+	if err != nil {
+		h.rollbackAccessReadError(w, userID, before, err)
+		return
+	}
 	results := syncNodes(h.Sync, targetNodeIDs)
 	if syncErr := syncFailure(results); syncErr != nil {
-		if rollbackErr := h.Access.Replace(userID, before); rollbackErr != nil {
+		if rollbackErr := h.Access.ReplaceInbounds(userID, before); rollbackErr != nil {
 			writeError(w, http.StatusInternalServerError, "node sync failed and access rollback failed: "+rollbackErr.Error())
 			return
 		}
@@ -401,9 +458,11 @@ func (h *AccessHandler) completeAccessChange(w http.ResponseWriter, userID int, 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user_id":          userID,
-		"accessible_nodes": after,
-		"sync":             results,
+		"user_id":             userID,
+		"inbound_ids":         after,
+		"accessible_inbounds": after,
+		"accessible_nodes":    afterNodeIDs,
+		"sync":                results,
 	})
 }
 

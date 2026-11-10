@@ -31,6 +31,9 @@ type NodeInbound struct {
 	Settings  json.RawMessage `json:"settings"`
 	Enabled   bool            `json:"enabled"`
 	SortOrder int             `json:"sort_order"`
+	Name      string          `json:"name"`
+	Outbound  *OutboundConfig `json:"outbound,omitempty"`
+	Custom    bool            `json:"custom"`
 }
 
 type NodeWithInbounds struct {
@@ -229,6 +232,9 @@ func (s *NodeStore) Delete(id int) error {
 		return err
 	}
 	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM user_inbound_access WHERE inbound_id IN (SELECT id FROM node_inbounds WHERE node_id = ?)`, id); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM node_inbounds WHERE node_id = ?`, id); err != nil {
 		return err
 	}
@@ -245,7 +251,7 @@ func (s *NodeStore) Delete(id int) error {
 }
 
 func (s *NodeStore) ListInbounds(nodeID int) ([]NodeInbound, error) {
-	rows, err := s.DB.Query(`SELECT id, node_id, tag, protocol, port, settings, enabled, COALESCE(sort_order,0) FROM node_inbounds WHERE node_id = ? ORDER BY sort_order, id`, nodeID)
+	rows, err := s.DB.Query(`SELECT id, node_id, tag, protocol, port, settings, enabled, COALESCE(sort_order,0), name, outbound, custom FROM node_inbounds WHERE node_id = ? ORDER BY sort_order, id`, nodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -254,8 +260,11 @@ func (s *NodeStore) ListInbounds(nodeID int) ([]NodeInbound, error) {
 	for rows.Next() {
 		var ib NodeInbound
 		var enabled int
-		var settings string
-		if err := rows.Scan(&ib.ID, &ib.NodeID, &ib.Tag, &ib.Protocol, &ib.Port, &settings, &enabled, &ib.SortOrder); err != nil {
+		var settings, outbound string
+		if err := rows.Scan(&ib.ID, &ib.NodeID, &ib.Tag, &ib.Protocol, &ib.Port, &settings, &enabled, &ib.SortOrder, &ib.Name, &outbound, &ib.Custom); err != nil {
+			return nil, err
+		}
+		if err := decodeOutbound(outbound, &ib); err != nil {
 			return nil, err
 		}
 		ib.Enabled = enabled == 1
@@ -270,6 +279,16 @@ type CreateInboundReq struct {
 	Protocol string          `json:"protocol"`
 	Port     int             `json:"port"`
 	Settings json.RawMessage `json:"settings"`
+	Name     string          `json:"name"`
+	Outbound *OutboundConfig `json:"outbound,omitempty"`
+	Custom   bool            `json:"custom"`
+}
+
+func decodeOutbound(raw string, inbound *NodeInbound) error {
+	if raw == "" || raw == "{}" || raw == "null" {
+		return nil
+	}
+	return json.Unmarshal([]byte(raw), &inbound.Outbound)
 }
 
 func (s *NodeStore) CreateInbound(nodeID int, req CreateInboundReq) (*NodeInbound, error) {
@@ -277,8 +296,15 @@ func (s *NodeStore) CreateInbound(nodeID int, req CreateInboundReq) (*NodeInboun
 	if len(settings) == 0 {
 		settings = json.RawMessage("{}")
 	}
-	res, err := s.DB.Exec(`INSERT INTO node_inbounds (node_id, tag, protocol, port, settings) VALUES (?, ?, ?, ?, ?)`,
-		nodeID, req.Tag, req.Protocol, req.Port, string(settings))
+	if err := ValidateOutbound(req.Outbound); err != nil {
+		return nil, err
+	}
+	outbound, err := json.Marshal(req.Outbound)
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.DB.Exec(`INSERT INTO node_inbounds (node_id, tag, protocol, port, settings, name, outbound, custom) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		nodeID, req.Tag, req.Protocol, req.Port, string(settings), req.Name, string(outbound), req.Custom)
 	if err != nil {
 		return nil, err
 	}
@@ -292,10 +318,13 @@ func (s *NodeStore) CreateInbound(nodeID int, req CreateInboundReq) (*NodeInboun
 func (s *NodeStore) GetInbound(id int) (*NodeInbound, error) {
 	var ib NodeInbound
 	var enabled int
-	var settingsStr string
-	err := s.DB.QueryRow(`SELECT id, node_id, tag, protocol, port, settings, enabled, COALESCE(sort_order,0) FROM node_inbounds WHERE id = ?`, id).
-		Scan(&ib.ID, &ib.NodeID, &ib.Tag, &ib.Protocol, &ib.Port, &settingsStr, &enabled, &ib.SortOrder)
+	var settingsStr, outbound string
+	err := s.DB.QueryRow(`SELECT id, node_id, tag, protocol, port, settings, enabled, COALESCE(sort_order,0), name, outbound, custom FROM node_inbounds WHERE id = ?`, id).
+		Scan(&ib.ID, &ib.NodeID, &ib.Tag, &ib.Protocol, &ib.Port, &settingsStr, &enabled, &ib.SortOrder, &ib.Name, &outbound, &ib.Custom)
 	if err != nil {
+		return nil, err
+	}
+	if err := decodeOutbound(outbound, &ib); err != nil {
 		return nil, err
 	}
 	ib.Enabled = enabled == 1
@@ -308,8 +337,15 @@ func (s *NodeStore) UpdateInbound(id int, req CreateInboundReq) (*NodeInbound, e
 	if len(settings) == 0 {
 		settings = json.RawMessage("{}")
 	}
-	result, err := s.DB.Exec(`UPDATE node_inbounds SET tag = ?, protocol = ?, port = ?, settings = ? WHERE id = ?`,
-		req.Tag, req.Protocol, req.Port, string(settings), id)
+	if err := ValidateOutbound(req.Outbound); err != nil {
+		return nil, err
+	}
+	outbound, err := json.Marshal(req.Outbound)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.DB.Exec(`UPDATE node_inbounds SET tag = ?, protocol = ?, port = ?, settings = ?, name = ?, outbound = ?, custom = ? WHERE id = ?`,
+		req.Tag, req.Protocol, req.Port, string(settings), req.Name, string(outbound), req.Custom, id)
 	if err != nil {
 		return nil, err
 	}
@@ -328,8 +364,12 @@ func (s *NodeStore) RestoreInbound(inbound NodeInbound) (*NodeInbound, error) {
 	if inbound.Enabled {
 		enabled = 1
 	}
-	_, err := s.DB.Exec(`INSERT INTO node_inbounds (id, node_id, tag, protocol, port, settings, enabled, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		inbound.ID, inbound.NodeID, inbound.Tag, inbound.Protocol, inbound.Port, string(inbound.Settings), enabled, inbound.SortOrder)
+	outbound, err := json.Marshal(inbound.Outbound)
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.DB.Exec(`INSERT INTO node_inbounds (id, node_id, tag, protocol, port, settings, enabled, sort_order, name, outbound, custom) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		inbound.ID, inbound.NodeID, inbound.Tag, inbound.Protocol, inbound.Port, string(inbound.Settings), enabled, inbound.SortOrder, inbound.Name, string(outbound), inbound.Custom)
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +377,15 @@ func (s *NodeStore) RestoreInbound(inbound NodeInbound) (*NodeInbound, error) {
 }
 
 func (s *NodeStore) DeleteInbound(id int) error {
-	result, err := s.DB.Exec(`DELETE FROM node_inbounds WHERE id = ?`, id)
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM user_inbound_access WHERE inbound_id = ?`, id); err != nil {
+		return err
+	}
+	result, err := tx.Exec(`DELETE FROM node_inbounds WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}
@@ -348,7 +396,7 @@ func (s *NodeStore) DeleteInbound(id int) error {
 	if deleted != 1 {
 		return sql.ErrNoRows
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *NodeStore) GetByToken(token string) (*Node, error) {

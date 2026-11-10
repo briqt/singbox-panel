@@ -43,25 +43,47 @@ func (h *SubscriptionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	accessibleNodes, _ := h.Access.ListNodeIDs(user.ID)
-	accessSet := make(map[int]bool, len(accessibleNodes))
-	for _, id := range accessibleNodes {
+	accessibleInbounds, err := h.Access.ListInboundIDs(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	accessSet := make(map[int]bool, len(accessibleInbounds))
+	for _, id := range accessibleInbounds {
 		accessSet[id] = true
+	}
+	accessibleNodes, err := h.Access.NodeIDsForInbounds(accessibleInbounds)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	nodeSet := make(map[int]bool, len(accessibleNodes))
+	for _, id := range accessibleNodes {
+		nodeSet[id] = true
 	}
 
 	var nodesWithInbounds []model.NodeWithInbounds
 	for _, n := range nodes {
-		if !n.Enabled || !accessSet[n.ID] {
+		if !n.Enabled || !nodeSet[n.ID] {
 			continue
 		}
 		inbounds, err := h.Nodes.ListInbounds(n.ID)
 		if err != nil {
-			continue
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
 		}
-		nodesWithInbounds = append(nodesWithInbounds, model.NodeWithInbounds{
-			Node:     n,
-			Inbounds: inbounds,
-		})
+		var allowedInbounds []model.NodeInbound
+		for _, inbound := range inbounds {
+			if inbound.Enabled && accessSet[inbound.ID] {
+				allowedInbounds = append(allowedInbounds, inbound)
+			}
+		}
+		if len(allowedInbounds) > 0 {
+			nodesWithInbounds = append(nodesWithInbounds, model.NodeWithInbounds{
+				Node:     n,
+				Inbounds: allowedInbounds,
+			})
+		}
 	}
 
 	// Subscription-Userinfo header

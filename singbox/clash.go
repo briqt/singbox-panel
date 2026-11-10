@@ -3,6 +3,8 @@ package singbox
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/briqt/singbox-panel/model"
@@ -11,6 +13,7 @@ import (
 func GenerateClashConfig(user model.User, nodes []model.NodeWithInbounds) string {
 	var proxies []string
 	var proxyNames []string
+	var autoNames []string
 
 	for _, n := range nodes {
 		if !n.Enabled {
@@ -26,6 +29,9 @@ func GenerateClashConfig(user model.User, nodes []model.NodeWithInbounds) string
 			if entry != "" {
 				proxies = append(proxies, entry)
 				proxyNames = append(proxyNames, name)
+				if ib.Outbound == nil {
+					autoNames = append(autoNames, name)
+				}
 			}
 		}
 	}
@@ -40,14 +46,19 @@ func GenerateClashConfig(user model.User, nodes []model.NodeWithInbounds) string
 	sb.WriteString("\nproxy-groups:\n")
 	sb.WriteString("  - name: Proxy\n    type: select\n    proxies:\n      - Auto\n")
 	for _, name := range proxyNames {
-		sb.WriteString(fmt.Sprintf("      - %s\n", name))
+		sb.WriteString(fmt.Sprintf("      - %s\n", yamlProxyName(name)))
 	}
 	sb.WriteString("      - DIRECT\n")
-	sb.WriteString("  - name: Auto\n    type: url-test\n    proxies:\n")
-	for _, name := range proxyNames {
-		sb.WriteString(fmt.Sprintf("      - %s\n", name))
+	if len(autoNames) == 0 {
+		// 仅获授权上游线的用户必须手选，不以 DIRECT 作为默认回退。
+		sb.WriteString("  - name: Auto\n    type: select\n    proxies:\n      - REJECT\n")
+	} else {
+		sb.WriteString("  - name: Auto\n    type: url-test\n    proxies:\n")
+		for _, name := range autoNames {
+			sb.WriteString(fmt.Sprintf("      - %s\n", yamlProxyName(name)))
+		}
+		sb.WriteString("    url: https://www.gstatic.com/generate_204\n    interval: 300\n")
 	}
-	sb.WriteString("    url: https://www.gstatic.com/generate_204\n    interval: 300\n")
 	sb.WriteString("\nrules:\n")
 	sb.WriteString("  - DOMAIN-SUFFIX,local,DIRECT\n")
 	sb.WriteString("  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve\n")
@@ -62,7 +73,19 @@ func GenerateClashConfig(user model.User, nodes []model.NodeWithInbounds) string
 	return sb.String()
 }
 
+var plainProxyName = regexp.MustCompile(`^[\p{L}\p{N}_.-]+$`)
+
+func yamlProxyName(name string) string {
+	if plainProxyName.MatchString(name) {
+		return name
+	}
+	return strconv.Quote(name)
+}
+
 func clashName(node model.Node, ib model.NodeInbound, names protocolNameTracker) string {
+	if ib.Name != "" {
+		return names.next(ib.Name)
+	}
 	switch ib.Protocol {
 	case "hysteria2":
 		return names.next(node.Name + "-Hy2")
@@ -75,6 +98,9 @@ func clashName(node model.Node, ib model.NodeInbound, names protocolNameTracker)
 }
 
 func buildClashProxy(user model.User, node model.Node, ib model.NodeInbound, name string) string {
+	// 名称使用 JSON/YAML 共用的双引号转义，防止自定义名称注入配置。
+	quoted := strconv.Quote(name)
+	name = quoted[1 : len(quoted)-1]
 	var s map[string]any
 	json.Unmarshal(ib.Settings, &s)
 	if s == nil {
@@ -128,7 +154,7 @@ func clashReality(user model.User, node model.Node, ib model.NodeInbound, s map[
     type: vless
     server: %s
     port: %d
-    udp: true
+    udp: %t
     uuid: %s
     flow: xtls-rprx-vision
     tls: true
@@ -137,7 +163,7 @@ func clashReality(user model.User, node model.Node, ib model.NodeInbound, s map[
     reality-opts:
       public-key: %s
       short-id: %s
-    network: tcp`, name, realityServer(node.Host, s), ib.Port, user.UUID, sni, fp, publicKey, shortID)
+    network: tcp`, name, realityServer(node.Host, s), ib.Port, ib.Outbound == nil, user.UUID, sni, fp, publicKey, shortID)
 }
 
 func clashHTTPUpgrade(user model.User, node model.Node, ib model.NodeInbound, s map[string]any, name string) string {
@@ -156,7 +182,7 @@ func clashHTTPUpgrade(user model.User, node model.Node, ib model.NodeInbound, s 
     type: vless
     server: %s
     port: 443
-    udp: true
+    udp: %t
     uuid: %s
     tls: true
     servername: %s
@@ -164,5 +190,5 @@ func clashHTTPUpgrade(user model.User, node model.Node, ib model.NodeInbound, s 
     network: httpupgrade
     httpupgrade-opts:
       path: %s
-      host: %s`, name, domain, user.UUID, domain, path, domain)
+      host: %s`, name, domain, ib.Outbound == nil, user.UUID, domain, path, domain)
 }

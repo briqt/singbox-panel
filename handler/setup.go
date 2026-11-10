@@ -158,14 +158,6 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Connect to node
-	client, err := h.Config.sshConnect(node)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "ssh connect failed: "+err.Error())
-		return
-	}
-	defer client.Close()
-
 	type inboundResult struct {
 		Protocol string `json:"protocol"`
 		Port     int    `json:"port"`
@@ -182,9 +174,10 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	existingProtos := map[string]model.NodeInbound{}
-	for _, ib := range existingInbounds {
-		existingProtos[ib.Protocol] = ib
+	existingProtos, err := managedSetupInbounds(existingInbounds)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
 	}
 	if domain != node.Domain {
 		selected := make(map[string]bool, len(req.Protocols))
@@ -192,12 +185,20 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 			selected[protocol] = true
 		}
 		for _, inbound := range existingInbounds {
-			if (inbound.Protocol == "hysteria2" || inbound.Protocol == "vless-httpupgrade") && !selected[inbound.Protocol] {
+			if !inbound.Custom && (inbound.Protocol == "hysteria2" || inbound.Protocol == "vless-httpupgrade") && !selected[inbound.Protocol] {
 				writeError(w, http.StatusConflict, "domain migration must include every existing domain-bound protocol")
 				return
 			}
 		}
 	}
+
+	// 所有歧义检查均在连接或修改节点之前完成。
+	client, err := h.Config.sshConnect(node)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ssh connect failed: "+err.Error())
+		return
+	}
+	defer client.Close()
 
 	var createdInboundIDs []int
 	var updatedInbounds []model.NodeInbound
@@ -209,9 +210,7 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for _, inbound := range updatedInbounds {
-			if _, err := h.Nodes.UpdateInbound(inbound.ID, model.CreateInboundReq{
-				Tag: inbound.Tag, Protocol: inbound.Protocol, Port: inbound.Port, Settings: inbound.Settings,
-			}); err != nil {
+			if _, err := h.Nodes.UpdateInbound(inbound.ID, inboundRequest(inbound)); err != nil {
 				rollbackErrors = append(rollbackErrors, fmt.Errorf("restore inbound %d: %w", inbound.ID, err))
 			}
 		}
@@ -226,9 +225,15 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 
 	// Ports handed out during this run, per L4 network. See selectListenPort.
 	reservedPorts := map[string]map[int]bool{"tcp": {}, "udp": {}}
+	for _, inbound := range existingInbounds {
+		reservedPorts[inboundNetwork(inbound.Protocol)][inbound.Port] = true
+	}
 	hadError := false
 	for _, proto := range req.Protocols {
 		existing, exists := existingProtos[proto]
+		if exists {
+			delete(reservedPorts[inboundNetwork(proto)], existing.Port)
+		}
 		switch proto {
 		case "hysteria2":
 			if domain == "" {
@@ -287,7 +292,12 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 			}
 			// Certificate and renewal machinery were verified even on an
 			// unchanged setup; existence of an inbound is not proof of health.
-			inboundReq := model.CreateInboundReq{Tag: "hysteria2", Protocol: "hysteria2", Port: port, Settings: mustMarshal(settings)}
+			inboundReq := setupInboundRequest(existing, exists, proto, port, settings)
+			if err := h.checkSetupInbound(node.ID, existing.ID, inboundReq); err != nil {
+				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: err.Error()})
+				hadError = true
+				continue
+			}
 			if exists && port == existing.Port && reflect.DeepEqual(oldSettings, settings) {
 				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "skipped", Details: "configuration unchanged; certificate checked"})
 				continue
@@ -335,6 +345,12 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 			if port == 0 {
 				port = selectListenPort(runner, "tcp", currentPort, reservedPorts["tcp"])
 			}
+			reservedPorts["tcp"][port] = true
+			if exists && (privateKey == "" || publicKey == "") {
+				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: "existing Reality identity is incomplete; refusing to rotate it"})
+				hadError = true
+				continue
+			}
 			if privateKey == "" || publicKey == "" {
 				keypairOut, err := sshRun(client, node.SingboxBin+" generate reality-keypair")
 				if err != nil {
@@ -349,7 +365,7 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 			}
-			if shortID == "" {
+			if !exists && shortID == "" {
 				shortIDOut, _ := sshRun(client, node.SingboxBin+" generate rand 8 --hex")
 				shortID = trimOutput(shortIDOut)
 				if shortID == "" {
@@ -379,13 +395,18 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 				results = append(results, inboundResult{Protocol: proto, Port: existing.Port, Status: "skipped", Details: "already configured"})
 				continue
 			}
-			settings := mustMarshal(map[string]any{
+			settings := map[string]any{
 				"sni": sni, "private_key": privateKey, "public_key": publicKey,
 				"short_id": shortID, "handshake_server": sni, "handshake_port": 443,
 				"fingerprint": "chrome",
 				"server":      server,
-			})
-			inboundReq := model.CreateInboundReq{Tag: "vless-reality", Protocol: "vless-reality", Port: port, Settings: settings}
+			}
+			inboundReq := setupInboundRequest(existing, exists, proto, port, settings)
+			if err := h.checkSetupInbound(node.ID, existing.ID, inboundReq); err != nil {
+				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: err.Error()})
+				hadError = true
+				continue
+			}
 			status := "ok"
 			if exists {
 				updatedInbounds = append(updatedInbounds, existing)
@@ -452,7 +473,12 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 			}
 
 			settings := map[string]any{"domain": domain, "path": path, "cert_path": certPath, "key_path": keyPath}
-			inboundReq := model.CreateInboundReq{Tag: "vless-httpupgrade", Protocol: "vless-httpupgrade", Port: port, Settings: mustMarshal(settings)}
+			inboundReq := setupInboundRequest(existing, exists, proto, port, settings)
+			if err := h.checkSetupInbound(node.ID, existing.ID, inboundReq); err != nil {
+				results = append(results, inboundResult{Protocol: proto, Port: port, Status: "error", Details: err.Error()})
+				hadError = true
+				continue
+			}
 			status := "ok"
 			if exists {
 				updatedInbounds = append(updatedInbounds, existing)
@@ -537,6 +563,55 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 		"inbounds": results, "push": "ok", "sync": syncResults, "node": node.Name,
 		"assessment": assessment, "kernel_tuning": tuning,
 	})
+}
+
+func managedSetupInbounds(inbounds []model.NodeInbound) (map[string]model.NodeInbound, error) {
+	managed := make(map[string]model.NodeInbound)
+	for _, inbound := range inbounds {
+		if inbound.Custom {
+			continue
+		}
+		if _, exists := managed[inbound.Protocol]; exists {
+			return nil, fmt.Errorf("multiple non-custom %s inbounds; refusing ambiguous auto-setup", inbound.Protocol)
+		}
+		managed[inbound.Protocol] = inbound
+	}
+	return managed, nil
+}
+
+func setupInboundRequest(existing model.NodeInbound, exists bool, protocol string, port int, settings map[string]any) model.CreateInboundReq {
+	req := model.CreateInboundReq{Tag: protocol, Protocol: protocol}
+	merged := make(map[string]any)
+	var original map[string]any
+	if exists {
+		req = inboundRequest(existing)
+		_ = json.Unmarshal(existing.Settings, &original)
+		for key, value := range original {
+			merged[key] = value
+		}
+	}
+	for key, value := range settings {
+		merged[key] = value
+	}
+	// 自动配置可以调整传输和伪装，但不得替换既有身份。
+	for _, key := range inboundIdentityFields {
+		if value, ok := original[key]; ok {
+			merged[key] = value
+		}
+	}
+	req.Port = port
+	req.Settings = mustMarshal(merged)
+	return req
+}
+
+func (h *SetupHandler) checkSetupInbound(nodeID, exceptID int, req model.CreateInboundReq) error {
+	// 本轮配置中已新增或更新的记录也参与检查，
+	// 即使节点尚未开始监听这些端口。
+	inbounds, err := h.Nodes.ListInbounds(nodeID)
+	if err != nil {
+		return err
+	}
+	return checkInboundConflicts(inbounds, exceptID, req)
 }
 
 func hysteriaSettings(old map[string]any, requested, domain string) map[string]any {

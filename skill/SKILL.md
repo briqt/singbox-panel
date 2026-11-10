@@ -65,11 +65,13 @@ POST /api/register  {"username":"someone", "password":"123456"}
 # 启用
 PUT /api/users/{id}  {"enabled":true}
 
-# 授权所有节点
+# 授权指定协议线路，自动同步受影响节点（包括同节点内授权变化）
+PUT /api/users/{id}  {"inbound_ids":[11,12]}
+
+# 授权当前所有线路的快照，不包括未来新增线路
 POST /api/users/{id}/access  {"all":true}
 
-# 推送配置使生效
-POST /api/batch/push-all
+# 无需额外 push-all；授权接口自身负责同步及失败回滚
 
 # 订阅链接
 GET /sub/{sub_token}            # base64 (v2rayN/Shadowrocket)
@@ -115,22 +117,47 @@ POST /api/users/{id}/reset-traffic
 ### 用户
 - `GET /api/users` — 列表
 - `POST /api/users` — 创建
-- `PUT /api/users/{id}` — 更新 (name/enabled/traffic_limit_bytes/expire_at/node_ids)，用户与权限合并保存并同步受影响节点；同步失败自动回滚
+- `PUT /api/users/{id}` — 更新 (name/enabled/traffic_limit_bytes/expire_at/inbound_ids)，用户与具体线路权限合并保存并同步受影响节点；同步失败精确恢复旧授权。兼容 node_ids 仅作为当前入站快照，不给未来线路授权
 - `DELETE /api/users/{id}` — 先从节点移除用户，节点同步成功后删除；失败自动回滚
 - `POST /api/users/{id}/reset-traffic` — 重置流量并同步节点；失败自动回滚
 - `POST /api/users/{id}/reset-sub-token` — 重置订阅令牌
 
 ### 访问控制
-- `GET /api/users/{id}/access` — 查看可访问节点
-- `POST /api/users/{id}/access` — 授权 ({node_id} 或 {all:true})，自动同步节点，失败回滚
-- `PUT /api/users/{id}/access` — 原子替换权限 ({node_ids:[1,2]})，自动同步节点，失败回滚
-- `DELETE /api/users/{id}/access` — 撤销 ({node_id} 或 {all:true})，自动同步节点，失败回滚
+- `GET /api/users/{id}/access` — 返回获授权入站（含 id/node_id/protocol/name）
+- `POST /api/users/{id}/access` — 授权 ({inbound_id} 或 {all:true})，自动同步节点，失败回滚
+- `PUT /api/users/{id}/access` — 原子替换权限 ({inbound_ids:[11,12]})，自动同步节点，失败回滚
+- `DELETE /api/users/{id}/access` — 撤销 ({inbound_id} 或 {all:true})，自动同步节点，失败回滚
+
+授权表以具体 inbound ID 为准；首次迁移仅把旧节点授权展开成已有线路快照。新增线路默认不授权，服务端不监听无授权线路，订阅也不输出；以后重启不能恢复已撤销权限。旧 node_id/node_ids 请求只作为兼容的当前线路快照，不表示未来继承。
 
 ### 节点
 - `GET /api/nodes` / `POST /api/nodes` / `PUT /api/nodes/{id}` / `DELETE /api/nodes/{id}`
 - `GET /api/nodes/{id}` — 详情含 inbounds
-- `POST /api/nodes/{id}/inbounds` — 添加协议并立即同步节点，失败回滚
-- `DELETE /api/inbounds/{id}` — 删除协议并立即同步节点，失败回滚
+- `POST /api/nodes/{id}/inbounds` — 添加自定义协议线路并同步节点，失败回滚；支持 name/tag/protocol/port/outbound。Reality 可省略 settings 自动生成独立身份，新增线路默认没有用户权限
+- `PUT /api/inbounds/{id}` — 编辑线路，未传 settings 保留身份；outbound:null 改为直连；失败恢复库和远端
+- `DELETE /api/inbounds/{id}` — 删除协议及其线路授权并同步节点，失败恢复二者
+
+### 单条线路使用上游
+
+新增独立 Reality：
+
+```json
+{"name":"示例节点-上游","tag":"reality-upstream","protocol":"vless-reality","port":2053,"outbound":{"type":"socks","server":"192.0.2.10","server_port":443,"username":"example-user","password":"example-password","network":"tcp"}}
+```
+
+只给新入站生成专属 outbound/route，原线路仍直出；认证失败或上游故障不得回落直连。出口只保存在服务端，不进入订阅。目前仅支持 SOCKS5 TCP，新 Reality 的 Clash 条目 udp:false，不加入 Auto 组；只有上游线权限时需在 Proxy 组手选。auto-setup/reprovision 不接管 custom 线路。配置推送会重启该节点 sing-box，原连接可能短暂重连。
+
+创建后用 `PUT /api/users/{id}` 的完整 `inbound_ids` 列表追加新 ID，不要覆盖掉原授权。上线验证须包含新线路实际出口、错误认证拒绝、未授权用户拒绝，以及原线路配置/订阅保持不变；只看监听或 check 结果不够。
+
+可复现配置入口为 `scripts/provision_upstream.py`：从 stdin 读取上面的 outbound JSON，凭据从 `--env-file` 中的 ADMIN_USER/ADMIN_PASS 读取，JWT 仅保存在内存。默认只读预览，显式 `--apply` 才创建及授权；同 tag 同配置重复执行不重建密钥。工具回读授权、原订阅条目和所有节点生成配置，失败清理本次新增线路与授权。
+
+```bash
+python3 scripts/provision_upstream.py --env-file /opt/singbox-panel/.env \
+  --node-id 1 --user-id 1 --name '示例节点-上游' --port 2053 < /受保护目录/upstream.json
+# 确认预览后同一命令加 --apply；凭据文件须处于私密目录且权限为 600。
+```
+
+回滚旧版本时必须同时恢复匹配的升级前数据库备份；不能仅换回旧二进制，因为旧版本只认识节点级权限。
 
 ### 节点运维
 - `GET /api/nodes/{id}/status` — SSH 连通性、sing-box 状态、各入站 TCP/UDP 监听状态，
@@ -179,7 +206,7 @@ POST /api/users/{id}/reset-traffic
   答 h2 + 200 / 0.12s；`www.kimi.com` 反过来在 laxcc 是 403、在东京是 200。
   所以这个问题只能按节点问，不能全局断言。
   加 `?host=www.deepseek.com`（可重复）可把候选表之外的域名也一起测。
-- `POST /api/nodes/{id}/reality-target` — `{"sni":"www.bing.com"}` 换掉 Reality 的伪装目标。
+- `POST /api/nodes/{id}/reality-target` — `{"sni":"www.bing.com","inbound_id":11}` 精确更换某条 Reality 的伪装目标；省略 inbound_id 只选择唯一非 custom 默认线路。
   先在该节点上探测，过不了 TLS 1.3 + HTTP/2 + 非错误状态码就返 422；通过后只改
   `sni` 与 `handshake_server`，**密钥对 / short_id / 端口 / UUID 全部原样**，再推配置。
   推送失败会把库里记录回滚成原目标——数据库说一套、节点跑一套比不改更糟。

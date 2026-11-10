@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -159,9 +158,19 @@ func (s *UserStore) Update(id int, req UpdateUserReq) (*User, error) {
 	return s.Get(id)
 }
 
-// UpdateWithAccess updates user properties and node assignments in one
-// transaction, preventing a partially saved edit.
+// UpdateWithAccess 是旧节点授权接口，在编辑用户的同一事务内，
+// 将节点 ID 转换为这些节点当前已有入站的授权快照。
 func (s *UserStore) UpdateWithAccess(id int, req UpdateUserReq, nodeIDs []int) (*User, error) {
+	return s.updateWithAccess(id, req, nodeIDs, true)
+}
+
+// UpdateWithInboundAccess 原子更新用户属性和精确的入站授权。
+// 回滚必须使用此方法，不能使用按节点生成快照的兼容接口。
+func (s *UserStore) UpdateWithInboundAccess(id int, req UpdateUserReq, inboundIDs []int) (*User, error) {
+	return s.updateWithAccess(id, req, inboundIDs, false)
+}
+
+func (s *UserStore) updateWithAccess(id int, req UpdateUserReq, ids []int, nodeSnapshot bool) (*User, error) {
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return nil, err
@@ -175,26 +184,18 @@ func (s *UserStore) UpdateWithAccess(id int, req UpdateUserReq, nodeIDs []int) (
 	if exists == 0 {
 		return nil, sql.ErrNoRows
 	}
-
-	nodeIDs = uniqueSortedIDs(nodeIDs)
-	for _, nodeID := range nodeIDs {
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, nodeID).Scan(&exists); err != nil {
+	inboundIDs := ids
+	if nodeSnapshot {
+		inboundIDs, err = inboundIDsForNodes(tx, ids)
+		if err != nil {
 			return nil, err
-		}
-		if exists == 0 {
-			return nil, fmt.Errorf("node %d not found", nodeID)
 		}
 	}
 	if err := applyUserUpdate(tx, id, req); err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(`DELETE FROM user_access WHERE user_id = ?`, id); err != nil {
+	if err := replaceInboundAccess(tx, id, inboundIDs); err != nil {
 		return nil, err
-	}
-	for _, nodeID := range nodeIDs {
-		if _, err := tx.Exec(`INSERT INTO user_access (user_id, node_id) VALUES (?, ?)`, id, nodeID); err != nil {
-			return nil, err
-		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -242,8 +243,7 @@ func applyUserUpdate(exec userUpdateExecer, id int, req UpdateUserReq) error {
 }
 
 func (s *UserStore) Delete(id int) error {
-	_, err := s.DB.Exec(`DELETE FROM users WHERE id = ?`, id)
-	return err
+	return s.DeleteWithRelatedData(id)
 }
 
 func (s *UserStore) DeleteWithRelatedData(id int) error {
@@ -252,6 +252,9 @@ func (s *UserStore) DeleteWithRelatedData(id int) error {
 		return err
 	}
 	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM user_inbound_access WHERE user_id = ?`, id); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM user_access WHERE user_id = ?`, id); err != nil {
 		return err
 	}

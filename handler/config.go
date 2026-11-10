@@ -134,7 +134,7 @@ func (h *ConfigHandler) getRawConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ConfigHandler) generateConfig(nodeID int) ([]byte, error) {
-	allowedUserIDs, err := h.Access.UsersForNode(nodeID)
+	inbounds, err := h.Nodes.ListInbounds(nodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -142,22 +142,27 @@ func (h *ConfigHandler) generateConfig(nodeID int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Filter to only users with access to this node
-	allowed := make(map[int]bool, len(allowedUserIDs))
-	for _, id := range allowedUserIDs {
-		allowed[id] = true
-	}
-	var users []model.User
-	for _, u := range allUsers {
-		if allowed[u.ID] {
-			users = append(users, u)
+	activeUsers := make(map[int]model.User, len(allUsers))
+	for _, user := range allUsers {
+		if h.Users.IsActive(&user) {
+			activeUsers[user.ID] = user
 		}
 	}
-	inbounds, err := h.Nodes.ListInbounds(nodeID)
-	if err != nil {
-		return nil, err
+	usersByInbound := make(map[int][]model.User, len(inbounds))
+	for _, inbound := range inbounds {
+		// 入站授权不得扩大为同节点其他入站的授权。
+		// 任意授权查询失败都必须中止生成，不能降级放行。
+		allowedUserIDs, err := h.Access.UsersForInbound(inbound.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range allowedUserIDs {
+			if user, ok := activeUsers[id]; ok {
+				usersByInbound[inbound.ID] = append(usersByInbound[inbound.ID], user)
+			}
+		}
 	}
-	return singbox.GenerateConfig(users, inbounds)
+	return singbox.GenerateConfigForInbounds(usersByInbound, inbounds)
 }
 
 // SyncNodes regenerates and pushes configuration only to the requested nodes.
@@ -346,13 +351,19 @@ func (h *ConfigHandler) pushViaSSHUnlocked(node *model.Node, configBytes []byte)
 func buildAtomicDeployCommand(configPath, tmpPath string) string {
 	backupPath := tmpPath + ".backup"
 	return fmt.Sprintf(`set -e
+umask 077
 mkdir -p $(dirname %s)
+if [ -f %s ] && cmp -s %s %s; then
+  rm -f %s
+  exit 0
+fi
 had_previous=0
 if [ -f %s ]; then
   cp %s %s
   had_previous=1
 fi
 cp %s %s
+chmod 600 %s
 rm -f %s
 if systemctl restart sing-box; then
   rm -f %s
@@ -368,9 +379,11 @@ else
   exit "$restart_status"
 fi`,
 		configPath,
+		configPath, tmpPath, configPath, tmpPath,
 		configPath,
 		configPath, backupPath,
 		tmpPath, configPath,
+		configPath,
 		tmpPath,
 		backupPath,
 		backupPath, configPath,
@@ -410,7 +423,7 @@ func sshWriteFile(client *ssh.Client, path string, data []byte) error {
 	}
 	defer session.Close()
 	session.Stdin = strings.NewReader(string(data))
-	return session.Run("cat > " + path)
+	return session.Run("umask 077; cat > " + path + " && chmod 600 " + path)
 }
 
 func parseNodeIDFromConfigPath(path string) int {

@@ -41,15 +41,44 @@ export interface Node {
   created_at: string
 }
 
+export interface SocksOutbound {
+  type: 'socks'
+  server: string
+  server_port: number
+  username?: string
+  password?: string
+  network?: 'tcp'
+}
+
 export interface Inbound {
   id: number
   node_id: number
+  name: string
   tag: string
   protocol: string
   port: number
   enabled: boolean
   sort_order: number
-  settings?: { profile?: string; obfs_password?: string }
+  settings?: Record<string, unknown>
+  outbound?: SocksOutbound
+  custom: boolean
+}
+
+export interface CreateInboundBody {
+  name: string
+  tag: string
+  protocol: 'vless-reality'
+  port: number
+  outbound?: SocksOutbound
+}
+
+export interface UpdateInboundBody {
+  name?: string
+  tag?: string
+  protocol?: string
+  port?: number
+  settings?: Record<string, unknown>
+  outbound?: SocksOutbound | null
 }
 
 export interface NodeDetail extends Node {
@@ -267,7 +296,7 @@ export const api = {
     id: number,
     body: {
       enabled?: boolean
-      node_ids?: number[]
+      inbound_ids?: number[]
       traffic_limit_bytes?: number
       expire_at?: string
       traffic_reset_day?: number
@@ -277,7 +306,7 @@ export const api = {
   deleteUser: (id: number) => request<unknown>(`/api/users/${id}`, send('DELETE')),
   resetTraffic: (id: number) => request<unknown>(`/api/users/${id}/reset-traffic`, send('POST')),
   resetSubToken: (id: number) => request<unknown>(`/api/users/${id}/reset-sub-token`, send('POST')),
-  userAccess: (id: number) => request<Node[] | null>(`/api/users/${id}/access`),
+  userAccess: (id: number) => request<Inbound[] | null>(`/api/users/${id}/access`),
 
   nodes: () => request<Node[] | null>('/api/nodes'),
   node: (id: number) => request<NodeDetail>(`/api/nodes/${id}`),
@@ -288,6 +317,10 @@ export const api = {
     request<unknown>('/api/nodes/reorder', send('PUT', items)),
   reorderInbounds: (nodeId: number, items: { id: number; sort_order: number }[]) =>
     request<unknown>(`/api/nodes/${nodeId}/inbounds/reorder`, send('PUT', items)),
+  createInbound: (nodeId: number, body: CreateInboundBody) =>
+    request<Inbound>(`/api/nodes/${nodeId}/inbounds`, send('POST', body)),
+  updateInbound: (id: number, body: UpdateInboundBody) =>
+    request<Inbound>(`/api/inbounds/${id}`, send('PUT', body)),
   deleteInbound: (id: number) => request<unknown>(`/api/inbounds/${id}`, send('DELETE')),
 
   nodeStatus: (id: number) => request<NodeStatus>(`/api/nodes/${id}/status`),

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Alert, Checkbox, Form, Input, InputNumber, Modal, Select, Typography } from 'antd'
 import { api } from '../api'
-import type { Node, NodeDetail, SetupAssessment } from '../api'
+import type { Inbound, Node, NodeDetail, SetupAssessment, SocksOutbound } from '../api'
 import { useI18n } from '../i18n'
 import { useToast } from '../toast'
 import { MODAL_WIDTH } from '../theme'
@@ -182,6 +182,175 @@ export function CertUploadModal({ node, onClose }: { node: Node | null; onClose:
   )
 }
 
+interface InboundFormValues {
+  name: string
+  tag: string
+  port: number
+  outboundType: 'direct' | 'socks'
+  server: string
+  serverPort: number
+  username?: string
+  password?: string
+  clearCredentials?: boolean
+}
+
+// 仅在打开时挂载；不回填已保存密码，也不提交 settings，避免重建 Reality 身份。
+export function InboundModal({
+  node,
+  inbound,
+  onClose,
+  onSaved,
+}: {
+  node: Node
+  inbound?: Inbound
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const { t } = useI18n()
+  const toast = useToast()
+  const [form] = Form.useForm<InboundFormValues>()
+  const [saving, setSaving] = useState(false)
+  const outboundType = Form.useWatch('outboundType', form)
+  const clearCredentials = Form.useWatch('clearCredentials', form)
+  const hasSavedPassword = !!inbound?.outbound?.password
+
+  const submit = async (values: InboundFormValues) => {
+    setSaving(true)
+    try {
+      let outbound: SocksOutbound | undefined
+      const sameUpstream = inbound?.outbound?.server === values.server?.trim()
+        && inbound?.outbound?.server_port === values.serverPort
+      if (values.outboundType === 'socks') {
+        outbound = {
+          type: 'socks',
+          server: values.server.trim(),
+          server_port: values.serverPort,
+          username: values.clearCredentials ? '' : values.username?.trim() || undefined,
+          password: values.clearCredentials ? '' : values.password || (sameUpstream ? inbound?.outbound?.password : undefined),
+          network: inbound?.outbound?.network,
+        }
+      }
+      const body = { name: values.name.trim(), tag: values.tag.trim(), port: values.port }
+      if (inbound) {
+        await api.updateInbound(inbound.id, { ...body, outbound: outbound ?? null })
+      } else {
+        await api.createInbound(node.id, { ...body, protocol: 'vless-reality', outbound })
+      }
+      toast.ok(t(inbound ? 'inboundSaved' : 'inboundCreated'))
+      form.resetFields()
+      onClose()
+      onSaved()
+    } catch (error) {
+      // 后端校验错误也不能把本次输入或已保存的密码带到 toast。
+      const detail = error instanceof Error ? error.message : String(error)
+      const secrets = [values.password, inbound?.outbound?.password].filter((value): value is string => !!value)
+      toast.err(new Error(secrets.reduce((message, secret) => message.split(secret).join('[redacted]'), detail)))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal
+      open
+      title={`${t(inbound ? 'editInbound' : 'newInbound')} — ${node.name}`}
+      width={MODAL_WIDTH.md}
+      onCancel={onClose}
+      onOk={form.submit}
+      okText={t('saveInbound')}
+      cancelText={t('cancel')}
+      confirmLoading={saving}
+      destroyOnHidden
+    >
+      <Alert
+        type={inbound ? 'info' : 'warning'}
+        showIcon
+        message={t(inbound ? 'inboundIdentityHint' : 'newInboundAccessHint')}
+        style={{ marginBottom: 16 }}
+      />
+      <Form
+        form={form}
+        layout="vertical"
+        onFinish={submit}
+        disabled={saving}
+        requiredMark={false}
+        initialValues={{
+          name: inbound?.name ?? '',
+          tag: inbound?.tag ?? '',
+          port: inbound?.port,
+          outboundType: inbound?.outbound ? 'socks' : 'direct',
+          server: inbound?.outbound?.server ?? '',
+          serverPort: inbound?.outbound?.server_port ?? 1080,
+          username: inbound?.outbound?.username ?? '',
+          password: '',
+          clearCredentials: false,
+        }}
+      >
+        <Form.Item name="name" label={t('inboundName')} extra={t('inboundNameHint')} rules={[{ required: !inbound, whitespace: !inbound }]}>
+          <Input autoFocus />
+        </Form.Item>
+        <Form.Item name="tag" label={t('inboundTag')} extra={t('inboundTagHint')} rules={[{ required: true, whitespace: true }]}>
+          <Input />
+        </Form.Item>
+        <Form.Item label={t('protocols')}>
+          <Input value={inbound?.protocol ?? 'vless-reality'} disabled />
+        </Form.Item>
+        <Form.Item name="port" label={t('inboundPort')} rules={[{ required: true }, { type: 'number', min: 1, max: 65535 }]}>
+          <InputNumber min={1} max={65535} precision={0} style={{ width: '100%' }} />
+        </Form.Item>
+        <Form.Item name="outboundType" label={t('egress')} extra={t('egressHint')}>
+          <Select options={[
+            { value: 'direct', label: t('egressDirect') },
+            { value: 'socks', label: t('egressSocks') },
+          ]} />
+        </Form.Item>
+        {outboundType === 'socks' && (
+          <>
+            <Form.Item name="server" label={t('socksServer')} extra={t('socksServerHint')} rules={[
+              { required: true, whitespace: true },
+              { pattern: /^[^\s/@?#]+$/, message: t('socksServerHint') },
+            ]}>
+              <Input autoComplete="off" />
+            </Form.Item>
+            <Form.Item name="serverPort" label={t('socksPort')} rules={[{ required: true }, { type: 'number', min: 1, max: 65535 }]}>
+              <InputNumber min={1} max={65535} precision={0} style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item name="username" label={t('socksUsername')}>
+              <Input autoComplete="off" disabled={saving || clearCredentials} />
+            </Form.Item>
+            <Form.Item
+              name="password"
+              label={t('socksPassword')}
+              extra={t(hasSavedPassword ? 'socksPasswordKeepHint' : 'socksPasswordHint')}
+              dependencies={['username', 'clearCredentials', 'server', 'serverPort']}
+              rules={[({ getFieldValue }) => ({
+                validator: (_, value?: string) => {
+                  if (getFieldValue('clearCredentials')) return Promise.resolve()
+                  const username = (getFieldValue('username') as string | undefined)?.trim()
+                  // 更换代理地址时必须重新输入凭据，不能把旧密码发给新服务器。
+                  const sameUpstream = (getFieldValue('server') as string | undefined)?.trim() === inbound?.outbound?.server
+                    && getFieldValue('serverPort') === inbound?.outbound?.server_port
+                  const password = value || (sameUpstream ? inbound?.outbound?.password : undefined)
+                  return !!username === !!password
+                    ? Promise.resolve()
+                    : Promise.reject(new Error(t('socksAuthPairHint')))
+                },
+              })]}
+            >
+              <Input.Password visibilityToggle={false} autoComplete="new-password" disabled={saving || clearCredentials} />
+            </Form.Item>
+            {hasSavedPassword && (
+              <Form.Item name="clearCredentials" valuePropName="checked">
+                <Checkbox>{t('socksClearCredentials')}</Checkbox>
+              </Form.Item>
+            )}
+          </>
+        )}
+      </Form>
+    </Modal>
+  )
+}
+
 // 一键配置：模式与域名任一变化都重新问后端要一次评估，
 // 首次进入（节点尚无入站）才用评估建议覆盖协议勾选，避免抹掉既有部署。
 export function AutoSetupModal({
@@ -215,7 +384,7 @@ export function AutoSetupModal({
     setDomain(node.domain ?? '')
     setRealitySNI('')
     const hy2 = detail?.inbounds.find((inbound) => inbound.protocol === 'hysteria2')?.settings
-    setHy2Profile(hy2?.profile ?? (hy2?.obfs_password ? 'salamander' : ''))
+    setHy2Profile(typeof hy2?.profile === 'string' ? hy2.profile : hy2?.obfs_password ? 'salamander' : '')
     setMode(
       existing.includes('vless-httpupgrade')
         ? 'cdn'
@@ -382,6 +551,18 @@ export function AutoSetupModal({
   )
 }
 
+// 配置预览不能成为上游密码的另一条明文展示路径。
+function redactConfigPasswords(content: string): string {
+  try {
+    return JSON.stringify(JSON.parse(content), (key, value) => /password/i.test(key) ? '[redacted]' : value, 2)
+  } catch {
+    return content.replace(
+      /(["']?[\w-]*password["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,}]+)/gi,
+      '$1"[redacted]"',
+    )
+  }
+}
+
 // 配置查看：预览（本地生成）与线上配置共用，只读
 export function ConfigModal({
   title,
@@ -403,7 +584,7 @@ export function ConfigModal({
       destroyOnHidden
     >
       <TextArea
-        value={content ?? ''}
+        value={redactConfigPasswords(content ?? '')}
         readOnly
         autoSize={{ minRows: 18, maxRows: 26 }}
         style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 }}

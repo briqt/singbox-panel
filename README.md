@@ -13,7 +13,8 @@ Personal sing-box proxy node management panel. Full lifecycle: create node → S
 ## Features
 
 - **One-click node setup** — auto-selects protocols, generates keys, issues certs, pushes config
-- **User management** — UUID-based auth, traffic limits, expiry, per-node access control
+- **用户管理** — UUID 认证、流量配额、到期时间和具体协议线路（inbound ID）级授权；同一节点的两条 Reality 可分别授权
+- **独立线路出口** — 同一节点可新增 Reality 线路，为单条入站绑定认证 SOCKS5 TCP 出口；默认线路继续直出，上游故障不回落直连
 - **Multi-format subscriptions** — base64 (v2rayN/Shadowrocket), Clash Meta YAML (auto-detect via User-Agent)
 - **Certificate management** — ACME via acme.sh with auto-renewal cron. Renewal
   decisions are made on the certificate's **expiry**, read back from the node,
@@ -172,6 +173,33 @@ Listen ports are chosen from conventional HTTPS ports (443, then 8443/2053/2083/
 Caddy on 443 keeps it. A random high port is an anomaly no protocol can paper
 over: no Apple or Microsoft edge serves TLS on port 31795.
 
+## 线路授权与上游出口
+
+授权粒度为具体的 `inbound.id`，不是节点或协议名称。首次升级会在事务中把旧节点授权展开为该节点**当时已有的全部线路**，并记录迁移标记；以后新增线路不继承旧授权，重启也不会重新授予已撤销权限。用户 UUID、订阅 token 和原入站身份参数不变。未获任何用户授权的入站不生成监听；订阅和服务端认证同时按线路过滤。
+
+在节点详情中新增 Reality 线路时，可设置独立名称、tag、空闲 TCP 端口及 SOCKS5 出口。省略 `settings` 时生成新密钥和 short ID，沿用默认 Reality 的握手目标但不修改原线路。出口只保存在服务端，不写入客户端订阅；目前仅支持 SOCKS5 TCP，相关 Reality/HTTPUpgrade 的 Clash 条目标记 `udp: false`。上游线路不加入 `Auto` 组，只有上游线路权限时必须在 `Proxy` 组手选。
+
+```json
+{
+  "name": "示例节点-上游",
+  "tag": "reality-upstream",
+  "protocol": "vless-reality",
+  "port": 2053,
+  "outbound": {
+    "type": "socks",
+    "server": "192.0.2.10",
+    "server_port": 443,
+    "username": "example-user",
+    "password": "example-password",
+    "network": "tcp"
+  }
+}
+```
+
+通过 `POST /api/nodes/{id}/inbounds` 新建后，再用 `PUT /api/users/{id}` 的 `inbound_ids` 显式授权。`PUT /api/inbounds/{id}` 编辑名称、端口及出口；未传 `settings` 保持协议身份，`outbound: null` 切回直连。新增的自定义线路不由 auto-setup/reprovision 接管；Reality 握手目标接口可用 `inbound_id` 精确定位。
+
+推送会重启该节点整个 sing-box，现有连接可能短暂重连，不承诺零中断。升级前备份数据库、二进制和节点配置；上线后应验证真实出口及错误凭据会失败，不能把监听正常或 `check` 成功当作上游可用。授权变更仅同步受影响节点，失败恢复原授权和配置。
+
 ## API
 
 All admin endpoints require `Authorization: Bearer <jwt>`, where the JWT comes
@@ -180,7 +208,7 @@ from `POST /api/login`.
 ### Users
 - `GET/POST /api/users` — list / create
 - `PUT/DELETE /api/users/{id}` — update / delete
-  - update accepts optional `node_ids`; user fields and assignments are saved together
+  - 更新接受 `inbound_ids`；用户字段与线路授权在同一事务中保存（兼容的 `node_ids` 仅授权当前已有入站，不继承未来线路）
   - affected node configs are regenerated and pushed before the response returns
   - if any push fails, the database change is rolled back and the previous config is restored
   - per-node push status is returned in the `sync` field
@@ -189,21 +217,22 @@ from `POST /api/login`.
 - `POST /api/register` — public registration (disabled by default)
 
 ### Access Control
-- `GET /api/users/{id}/access` — list accessible nodes
-- `POST /api/users/{id}/access` — grant (`{node_id}` or `{all:true}`)
-- `PUT /api/users/{id}/access` — atomically replace (`{node_ids:[1,2]}`)
-- `DELETE /api/users/{id}/access` — revoke
+- `GET /api/users/{id}/access` — 返回获授权的具体入站
+- `POST /api/users/{id}/access` — 授权（`{inbound_id}` 或 `{all:true}`；全部也仅是当前线路快照）
+- `PUT /api/users/{id}/access` — 原子替换（`{inbound_ids:[1,2]}`）
+- `DELETE /api/users/{id}/access` — 撤销具体入站或全部授权
 
 Granting, replacing, or revoking access automatically synchronizes every
 affected sing-box node. A failed synchronization rolls the access change back.
 Existing access endpoints remain available for API compatibility; the admin UI
-edits status and node access together.
+同时编辑状态和具体线路权限。
 
 ### Nodes
 - `GET/POST /api/nodes` — list / create
 - `GET/PUT/DELETE /api/nodes/{id}` — get (with inbounds) / update / delete
 - `POST /api/nodes/{id}/inbounds` — add inbound and synchronize the node
-- `DELETE /api/inbounds/{id}` — remove inbound and synchronize the node
+- `PUT /api/inbounds/{id}` — 编辑线路、保留未传身份参数并同步节点
+- `DELETE /api/inbounds/{id}` — 删除线路及其授权并同步节点，失败恢复
 
 Inbound changes are rolled back when node synchronization fails. A node domain
 used by Hysteria2 or HTTPUpgrade must be migrated through `auto-setup`; direct

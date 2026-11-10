@@ -23,40 +23,94 @@ func hostForURI(host string) string {
 const V2RayAPIListen = "127.0.0.1:10085"
 
 func GenerateConfig(users []model.User, inbounds []model.NodeInbound) ([]byte, error) {
-	ibList := buildInbounds(users, inbounds)
+	return generateConfig(func(model.NodeInbound) []model.User { return users }, inbounds)
+}
 
-	experimental := map[string]any{
-		"clash_api": map[string]any{
-			"external_controller": "127.0.0.1:9090",
-		},
-	}
-
-	// Enable per-user traffic accounting. sing-box tracks uplink/downlink
-	// counters for every listed inbound tag and user name, which the poller
-	// reads via the v2ray_api StatsService for exact per-user attribution.
-	if tags := inboundTags(ibList); len(tags) > 0 && len(users) > 0 {
-		names := make([]string, 0, len(users))
-		for _, u := range users {
-			names = append(names, u.Name)
+// GenerateConfigForInbounds 是生产配置入口。无授权用户的入站不监听，避免协议
+// 实现把空认证列表解释成免认证；新增线路因此在显式授权前保持关闭。
+func GenerateConfigForInbounds(usersByInbound map[int][]model.User, inbounds []model.NodeInbound) ([]byte, error) {
+	active := make([]model.NodeInbound, 0, len(inbounds))
+	for _, ib := range inbounds {
+		if len(usersByInbound[ib.ID]) > 0 {
+			active = append(active, ib)
 		}
+	}
+	return generateConfig(func(ib model.NodeInbound) []model.User { return usersByInbound[ib.ID] }, active)
+}
+
+func generateConfig(usersFor func(model.NodeInbound) []model.User, inbounds []model.NodeInbound) ([]byte, error) {
+	ibList := make([]map[string]any, 0, len(inbounds))
+	outbounds := []map[string]any{{"type": "direct", "tag": "direct"}}
+	var rules []map[string]any
+	var names []string
+	seenUsers := map[string]bool{}
+	usedTags := map[string]bool{}
+	for _, ib := range inbounds {
+		if !ib.Enabled {
+			continue
+		}
+		if err := model.ValidateOutbound(ib.Outbound); err != nil {
+			return nil, fmt.Errorf("inbound %d: %w", ib.ID, err)
+		}
+		var settings map[string]any
+		if len(ib.Settings) > 0 {
+			if err := json.Unmarshal(ib.Settings, &settings); err != nil {
+				return nil, fmt.Errorf("inbound %d: invalid settings", ib.ID)
+			}
+		}
+		if settings == nil {
+			settings = map[string]any{}
+		}
+		tag := uniqueTag(ib.Tag, ib.Protocol, ib.Port, usedTags)
+		users := usersFor(ib)
+		var inbound map[string]any
+		switch ib.Protocol {
+		case "hysteria2":
+			inbound = buildHysteria2Inbound(users, ib, settings, tag)
+		case "vless-reality":
+			inbound = buildRealityInbound(users, ib, settings, tag)
+		case "vless-httpupgrade":
+			inbound = buildHTTPUpgradeInbound(users, ib, settings, tag)
+		default:
+			return nil, fmt.Errorf("inbound %d: unsupported protocol", ib.ID)
+		}
+		ibList = append(ibList, inbound)
+		for _, user := range users {
+			if !seenUsers[user.Name] {
+				seenUsers[user.Name] = true
+				names = append(names, user.Name)
+			}
+		}
+		if upstream := ib.Outbound; upstream != nil {
+			// 直接引用本轮实际生成的 tag，重排和去重不会导致路由串线。
+			outboundTag := "upstream-" + tag
+			outbound := map[string]any{
+				"type": "socks", "tag": outboundTag, "version": "5",
+				"server": upstream.Server, "server_port": upstream.ServerPort,
+				"network": "tcp",
+			}
+			if upstream.Username != "" {
+				outbound["username"] = upstream.Username
+				outbound["password"] = upstream.Password
+			}
+			outbounds = append(outbounds, outbound)
+			rules = append(rules, map[string]any{"inbound": []string{tag}, "action": "route", "outbound": outboundTag})
+		}
+	}
+	experimental := map[string]any{"clash_api": map[string]any{"external_controller": "127.0.0.1:9090"}}
+	if len(ibList) > 0 && len(names) > 0 {
 		experimental["v2ray_api"] = map[string]any{
 			"listen": V2RayAPIListen,
-			"stats": map[string]any{
-				"enabled":  true,
-				"inbounds": tags,
-				"users":    names,
-			},
+			"stats":  map[string]any{"enabled": true, "inbounds": inboundTags(ibList), "users": names},
 		}
 	}
-
 	config := map[string]any{
-		"log": map[string]any{
-			"level":     "info",
-			"timestamp": true,
-		},
-		"experimental": experimental,
-		"inbounds":     ibList,
-		"outbounds":    []map[string]any{{"type": "direct", "tag": "direct"}},
+		"log":          map[string]any{"level": "info", "timestamp": true},
+		"experimental": experimental, "inbounds": ibList, "outbounds": outbounds,
+	}
+	// 旧配置不凭空增加 route，保证未使用上游的节点生成结果保持兼容。
+	if len(rules) > 0 {
+		config["route"] = map[string]any{"rules": rules, "final": "direct"}
 	}
 	return json.MarshalIndent(config, "", "  ")
 }
@@ -71,43 +125,20 @@ func inboundTags(ibList []map[string]any) []string {
 	return tags
 }
 
-func buildInbounds(users []model.User, inbounds []model.NodeInbound) []map[string]any {
-	var result []map[string]any
-	usedTags := map[string]bool{}
-	for _, ib := range inbounds {
-		if !ib.Enabled {
-			continue
-		}
-		var settings map[string]any
-		json.Unmarshal(ib.Settings, &settings)
-		if settings == nil {
-			settings = map[string]any{}
-		}
-		tag := uniqueTag(ib.Tag, ib.Protocol, ib.Port, usedTags)
-		switch ib.Protocol {
-		case "hysteria2":
-			result = append(result, buildHysteria2Inbound(users, ib, settings, tag))
-		case "vless-reality":
-			result = append(result, buildRealityInbound(users, ib, settings, tag))
-		case "vless-httpupgrade":
-			result = append(result, buildHTTPUpgradeInbound(users, ib, settings, tag))
-		}
-	}
-	return result
-}
-
 func uniqueTag(tag, protocol string, port int, used map[string]bool) string {
 	base := tag
 	if base == "" {
 		base = protocol
 	}
-	if !used[base] {
-		used[base] = true
-		return base
+	candidate := base
+	for suffix := 0; used[candidate]; suffix++ {
+		candidate = fmt.Sprintf("%s-%d", base, port)
+		if suffix > 0 {
+			candidate = fmt.Sprintf("%s-%d-%d", base, port, suffix)
+		}
 	}
-	unique := fmt.Sprintf("%s-%d", base, port)
-	used[unique] = true
-	return unique
+	used[candidate] = true
+	return candidate
 }
 
 func buildHysteria2Inbound(users []model.User, ib model.NodeInbound, s map[string]any, tag string) map[string]any {
@@ -276,7 +307,7 @@ func buildHysteria2URI(user model.User, node model.Node, ib model.NodeInbound, s
 	if domain == "" {
 		return ""
 	}
-	name := names.next(node.Name + "-Hy2")
+	name := clashName(node, ib, names)
 	obfs := ""
 	if obfsPassword := hysteriaObfsPassword(s); obfsPassword != "" {
 		obfs = "&obfs=salamander&obfs-password=" + url.QueryEscape(obfsPassword)
@@ -296,7 +327,7 @@ func buildRealityURI(user model.User, node model.Node, ib model.NodeInbound, s m
 	if sni == "" || publicKey == "" {
 		return ""
 	}
-	name := names.next(node.Name + "-Reality")
+	name := clashName(node, ib, names)
 	return fmt.Sprintf("vless://%s@%s:%d?encryption=none&security=reality&sni=%s&pbk=%s&sid=%s&fp=%s&flow=xtls-rprx-vision&type=tcp#%s",
 		user.UUID, hostForURI(realityServer(node.Host, s)), ib.Port, sni, publicKey, shortID, fp, url.PathEscape(name))
 }
@@ -314,7 +345,7 @@ func buildHTTPUpgradeURI(user model.User, node model.Node, ib model.NodeInbound,
 		path = "/upgrade"
 	}
 	// Client always connects to CF on 443 (CF handles TLS)
-	name := names.next(node.Name + "-CDN")
+	name := clashName(node, ib, names)
 	return fmt.Sprintf("vless://%s@%s:%d?encryption=none&security=tls&sni=%s&type=httpupgrade&host=%s&path=%s&fp=chrome#%s",
 		user.UUID, domain, 443, domain, domain, path, name)
 }

@@ -33,10 +33,11 @@ type realityTargetProbe struct {
 }
 
 type realityTargetsResponse struct {
-	Node     string               `json:"node"`
-	Current  string               `json:"current,omitempty"`
-	ProbedAt string               `json:"probed_at"`
-	Targets  []realityTargetProbe `json:"targets"`
+	Node      string               `json:"node"`
+	InboundID int                  `json:"inbound_id,omitempty"`
+	Current   string               `json:"current,omitempty"`
+	ProbedAt  string               `json:"probed_at"`
+	Targets   []realityTargetProbe `json:"targets"`
 }
 
 // HandleRealityTargets probes every candidate from the node and reports what the
@@ -55,12 +56,20 @@ func (h *NodeOpsHandler) HandleRealityTargets(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	inboundID, err := requestedRealityInboundID(r, nil)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	target, err := selectRealityInbound(inbounds, inboundID)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
 	current := ""
-	for _, inbound := range inbounds {
-		if inbound.Protocol == "vless-reality" {
-			current = realitySNIOf(inbound)
-			break
-		}
+	if target != nil {
+		current = realitySNIOf(*target)
+		inboundID = target.ID
 	}
 
 	// ?host=... measures something the candidate list does not cover, which is
@@ -102,10 +111,8 @@ func (h *NodeOpsHandler) HandleRealityTargets(w http.ResponseWriter, r *http.Req
 	})
 
 	writeJSON(w, http.StatusOK, realityTargetsResponse{
-		Node:     node.Name,
-		Current:  current,
-		ProbedAt: time.Now().UTC().Format(time.RFC3339),
-		Targets:  rows,
+		Node: node.Name, InboundID: inboundID,
+		Current: current, ProbedAt: time.Now().UTC().Format(time.RFC3339), Targets: rows,
 	})
 }
 
@@ -127,7 +134,8 @@ func (h *NodeOpsHandler) HandleRealityTarget(w http.ResponseWriter, r *http.Requ
 	}
 
 	var req struct {
-		SNI string `json:"sni"`
+		SNI       string `json:"sni"`
+		InboundID *int   `json:"inbound_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -143,15 +151,18 @@ func (h *NodeOpsHandler) HandleRealityTarget(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	var target *model.NodeInbound
-	for i := range inbounds {
-		if inbounds[i].Protocol == "vless-reality" {
-			target = &inbounds[i]
-			break
-		}
+	inboundID, err := requestedRealityInboundID(r, req.InboundID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	target, err := selectRealityInbound(inbounds, inboundID)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
 	}
 	if target == nil {
-		writeError(w, http.StatusBadRequest, "node has no vless-reality inbound")
+		writeError(w, http.StatusBadRequest, "node has no default vless-reality inbound; specify inbound_id for a custom line")
 		return
 	}
 
@@ -182,7 +193,7 @@ func (h *NodeOpsHandler) HandleRealityTarget(w http.ResponseWriter, r *http.Requ
 	previous, _ := settings["sni"].(string)
 	if previous == req.SNI {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"node": node.Name, "previous": previous, "sni": req.SNI, "status": "unchanged",
+			"node": node.Name, "inbound_id": target.ID, "previous": previous, "sni": req.SNI, "status": "unchanged",
 		})
 		return
 	}
@@ -194,10 +205,9 @@ func (h *NodeOpsHandler) HandleRealityTarget(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	original := append(json.RawMessage(nil), target.Settings...)
-	if _, err := h.Nodes.UpdateInbound(target.ID, model.CreateInboundReq{
-		Tag: target.Tag, Protocol: target.Protocol, Port: target.Port, Settings: raw,
-	}); err != nil {
+	updated := inboundRequest(*target)
+	updated.Settings = raw
+	if _, err := h.Nodes.UpdateInbound(target.ID, updated); err != nil {
 		writeError(w, http.StatusInternalServerError, "store new target: "+err.Error())
 		return
 	}
@@ -207,11 +217,13 @@ func (h *NodeOpsHandler) HandleRealityTarget(w http.ResponseWriter, r *http.Requ
 	// than leaving the two disagreeing.
 	results := h.Config.SyncNodes([]int{node.ID})
 	if err := syncFailure(results); err != nil {
-		if _, rollbackErr := h.Nodes.UpdateInbound(target.ID, model.CreateInboundReq{
-			Tag: target.Tag, Protocol: target.Protocol, Port: target.Port, Settings: original,
-		}); rollbackErr != nil {
+		if _, rollbackErr := h.Nodes.UpdateInbound(target.ID, inboundRequest(*target)); rollbackErr != nil {
 			writeError(w, http.StatusInternalServerError,
 				"push failed and the stored target could not be restored: "+rollbackErr.Error())
+			return
+		}
+		if restoreErr := syncFailure(h.Config.SyncNodes([]int{node.ID})); restoreErr != nil {
+			writeError(w, http.StatusBadGateway, "target was rolled back, but restoring the node failed: "+restoreErr.Error())
 			return
 		}
 		writeError(w, http.StatusBadGateway, "push failed, stored target reverted: "+err.Error())
@@ -219,11 +231,9 @@ func (h *NodeOpsHandler) HandleRealityTarget(w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"node":     node.Name,
-		"previous": previous,
-		"sni":      req.SNI,
-		"status":   "updated",
-		"push":     results[0],
+		"node": node.Name, "inbound_id": target.ID,
+		"previous": previous, "sni": req.SNI,
+		"status": "updated", "push": results[0],
 	})
 }
 
@@ -234,6 +244,56 @@ func (h *NodeOpsHandler) loadNode(w http.ResponseWriter, r *http.Request) (*mode
 		return nil, false
 	}
 	return node, true
+}
+
+func requestedRealityInboundID(r *http.Request, bodyID *int) (int, error) {
+	id := 0
+	if bodyID != nil {
+		if *bodyID <= 0 {
+			return 0, fmt.Errorf("inbound_id must be a positive integer")
+		}
+		id = *bodyID
+	}
+	if values, present := r.URL.Query()["inbound_id"]; present {
+		if len(values) != 1 {
+			return 0, fmt.Errorf("inbound_id must be supplied once")
+		}
+		queryID, err := strconv.Atoi(values[0])
+		if err != nil || queryID <= 0 || (id != 0 && id != queryID) {
+			return 0, fmt.Errorf("inbound_id must be a positive integer matching the request body")
+		}
+		id = queryID
+	}
+	return id, nil
+}
+
+// 隐式选择只定位唯一的自动管理 Reality 线路。
+// 自定义线路必须指定 ID；多个遗留默认线路需要操作者处理。
+func selectRealityInbound(inbounds []model.NodeInbound, inboundID int) (*model.NodeInbound, error) {
+	var target *model.NodeInbound
+	for i := range inbounds {
+		inbound := &inbounds[i]
+		if inbound.Protocol != "vless-reality" {
+			continue
+		}
+		if inboundID != 0 {
+			if inbound.ID == inboundID {
+				return inbound, nil
+			}
+			continue
+		}
+		if inbound.Custom {
+			continue
+		}
+		if target != nil {
+			return nil, fmt.Errorf("multiple default vless-reality inbounds; specify inbound_id")
+		}
+		target = inbound
+	}
+	if inboundID != 0 {
+		return nil, fmt.Errorf("node has no vless-reality inbound with id %d", inboundID)
+	}
+	return target, nil
 }
 
 func realitySNIOf(inbound model.NodeInbound) string {

@@ -1,10 +1,14 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"strconv"
 	"testing"
+
+	"github.com/briqt/singbox-panel/model"
 )
 
 var errProbeFailed = errors.New("ssh: probe failed")
@@ -38,6 +42,77 @@ func TestAutoSetupRejectsInvalidRequestsBeforeSSH(t *testing.T) {
 				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestSetupKeepsCustomRealityOutsideManagedSet(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	node := env.createNode(t, "node-1")
+	// 将自定义线路放在前面，确保按首个协议匹配选择时会暴露误接管问题。
+	custom := createTestCustomReality(t, env, node.ID)
+	managed, err := env.nodes.CreateInbound(node.ID, model.CreateInboundReq{
+		Name: "default display name", Tag: "legacy-reality-tag", Protocol: "vless-reality", Port: 443,
+		Outbound: &model.OutboundConfig{Type: "socks", Server: "127.0.0.4", ServerPort: 1080, Network: "tcp"},
+		Settings: json.RawMessage(`{"sni":"www.apple.com","private_key":"default-private","public_key":"default-public","short_id":"0123456789abcdef","extra":"retained"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbounds, err := env.nodes.ListInbounds(node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := managedSetupInbounds(inbounds)
+	if err != nil || len(selected) != 1 || selected["vless-reality"].ID != managed.ID {
+		t.Fatalf("auto-setup adopted a custom line: selected=%#v err=%v", selected, err)
+	}
+	current := selected["vless-reality"]
+	req := setupInboundRequest(current, true, "vless-reality", 2053, map[string]any{
+		"sni": "www.bing.com", "handshake_server": "www.bing.com", "private_key": "must-not-rotate",
+	})
+	if _, err := env.nodes.UpdateInbound(current.ID, req); err != nil {
+		t.Fatal(err)
+	}
+	untouched, err := env.nodes.GetInbound(custom.ID)
+	if err != nil || !reflect.DeepEqual(untouched, custom) {
+		t.Fatalf("auto-setup changed the custom line: %#v err=%v", untouched, err)
+	}
+	updated, err := env.nodes.GetInbound(managed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != managed.Name || updated.Tag != managed.Tag || updated.Custom || !reflect.DeepEqual(updated.Outbound, managed.Outbound) || updated.Port != 2053 {
+		t.Fatalf("auto-setup dropped managed metadata: %#v", updated)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(updated.Settings, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings["private_key"] != "default-private" || settings["public_key"] != "default-public" || settings["short_id"] != "0123456789abcdef" || settings["extra"] != "retained" || settings["sni"] != "www.bing.com" {
+		t.Fatalf("auto-setup lost identity or unrelated settings: %#v", settings)
+	}
+	customOnly, err := managedSetupInbounds([]model.NodeInbound{*custom})
+	if err != nil || len(customOnly) != 0 {
+		t.Fatalf("custom-only protocol was adopted instead of left alone: %#v err=%v", customOnly, err)
+	}
+}
+
+func TestAutoSetupRejectsAmbiguousManagedProtocolBeforeSSH(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	node := env.createNode(t, "node-1")
+	for i, port := range []int{443, 2053} {
+		if _, err := env.nodes.CreateInbound(node.ID, model.CreateInboundReq{
+			Tag: "legacy-" + strconv.Itoa(i), Protocol: "vless-reality", Port: port, Settings: json.RawMessage(`{}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 故意将 Config 置空：重复协议必须在连接 SSH 之前被拒绝。
+	setup := &SetupHandler{Nodes: env.nodes}
+	rec := performJSONRequest(t, http.HandlerFunc(setup.HandleAutoSetup), http.MethodPost,
+		"/api/nodes/"+strconv.Itoa(node.ID)+"/auto-setup", map[string]any{"protocols": []string{"vless-reality"}})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

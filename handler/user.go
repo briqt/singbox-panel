@@ -88,7 +88,7 @@ func (h *UserHandler) update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
-	beforeNodeIDs, err := h.Access.ListNodeIDs(id)
+	beforeInboundIDs, err := h.Access.ListInboundIDs(id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -96,36 +96,50 @@ func (h *UserHandler) update(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		model.UpdateUserReq
-		NodeIDs *[]int `json:"node_ids"`
+		NodeIDs    *[]int `json:"node_ids"`
+		InboundIDs *[]int `json:"inbound_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+	if req.NodeIDs != nil && req.InboundIDs != nil {
+		writeError(w, http.StatusBadRequest, "specify inbound_ids or node_ids, not both")
+		return
+	}
 	var user *model.User
-	if req.NodeIDs != nil {
+	switch {
+	case req.InboundIDs != nil:
+		user, err = h.Store.UpdateWithInboundAccess(id, req.UpdateUserReq, *req.InboundIDs)
+	case req.NodeIDs != nil:
 		user, err = h.Store.UpdateWithAccess(id, req.UpdateUserReq, *req.NodeIDs)
-	} else {
+	default:
 		user, err = h.Store.Update(id, req.UpdateUserReq)
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	afterNodeIDs, err := h.Access.ListNodeIDs(id)
+	afterInboundIDs, err := h.Access.ListInboundIDs(id)
+	var targetNodeIDs []int
+	if err == nil {
+		targetInboundIDs := changedIDs(beforeInboundIDs, afterInboundIDs)
+		if userConfigChanged(before, user) {
+			targetInboundIDs = unionIDs(beforeInboundIDs, afterInboundIDs)
+		}
+		targetNodeIDs, err = h.Access.NodeIDsForInbounds(targetInboundIDs)
+	}
 	if err != nil {
-		h.restoreUser(before, beforeNodeIDs)
+		if rollbackErr := h.restoreUser(before, beforeInboundIDs); rollbackErr != nil {
+			writeError(w, http.StatusInternalServerError, "read access failed and user rollback failed: "+rollbackErr.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	targetNodeIDs := changedIDs(beforeNodeIDs, afterNodeIDs)
-	if req.NodeIDs != nil || userConfigChanged(before, user) {
-		targetNodeIDs = unionIDs(beforeNodeIDs, afterNodeIDs)
-	}
 	results := syncNodes(h.Sync, targetNodeIDs)
 	if syncErr := syncFailure(results); syncErr != nil {
-		if rollbackErr := h.restoreUser(before, beforeNodeIDs); rollbackErr != nil {
+		if rollbackErr := h.restoreUser(before, beforeInboundIDs); rollbackErr != nil {
 			writeError(w, http.StatusInternalServerError, "node sync failed and user rollback failed: "+rollbackErr.Error())
 			return
 		}
@@ -154,19 +168,24 @@ func (h *UserHandler) delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
-	nodeIDs, err := h.Access.ListNodeIDs(id)
+	inboundIDs, err := h.Access.ListInboundIDs(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	nodeIDs, err := h.Access.NodeIDsForInbounds(inboundIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	disabled := false
-	if _, err := h.Store.UpdateWithAccess(id, model.UpdateUserReq{Enabled: &disabled}, nil); err != nil {
+	if _, err := h.Store.UpdateWithInboundAccess(id, model.UpdateUserReq{Enabled: &disabled}, nil); err != nil {
 		writeError(w, http.StatusInternalServerError, "prepare user deletion: "+err.Error())
 		return
 	}
 	results := syncNodes(h.Sync, nodeIDs)
 	if syncErr := syncFailure(results); syncErr != nil {
-		if rollbackErr := h.restoreUser(before, nodeIDs); rollbackErr != nil {
+		if rollbackErr := h.restoreUser(before, inboundIDs); rollbackErr != nil {
 			writeError(w, http.StatusInternalServerError, "node sync failed and user rollback failed: "+rollbackErr.Error())
 			return
 		}
@@ -179,7 +198,7 @@ func (h *UserHandler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.Store.DeleteWithRelatedData(id); err != nil {
-		if rollbackErr := h.restoreUser(before, nodeIDs); rollbackErr != nil {
+		if rollbackErr := h.restoreUser(before, inboundIDs); rollbackErr != nil {
 			writeError(w, http.StatusInternalServerError, "delete user failed and rollback failed: "+rollbackErr.Error())
 			return
 		}
@@ -255,19 +274,15 @@ func userConfigChanged(before, after *model.User) bool {
 		before.ExpireAt != after.ExpireAt
 }
 
-func (h *UserHandler) restoreUser(user *model.User, nodeIDs []int) error {
-	name := user.Name
-	enabled := user.Enabled
-	trafficLimit := user.TrafficLimitBytes
-	trafficResetDay := user.TrafficResetDay
-	expireAt := user.ExpireAt
-	_, err := h.Store.UpdateWithAccess(user.ID, model.UpdateUserReq{
-		Name:              &name,
-		Enabled:           &enabled,
-		TrafficLimitBytes: &trafficLimit,
-		TrafficResetDay:   &trafficResetDay,
-		ExpireAt:          &expireAt,
-	}, nodeIDs)
+func (h *UserHandler) restoreUser(user *model.User, inboundIDs []int) error {
+	_, err := h.Store.UpdateWithInboundAccess(user.ID, model.UpdateUserReq{
+		Name:              &user.Name,
+		Enabled:           &user.Enabled,
+		TrafficLimitBytes: &user.TrafficLimitBytes,
+		TrafficResetDay:   &user.TrafficResetDay,
+		ExpireAt:          &user.ExpireAt,
+		Note:              &user.Note,
+	}, inboundIDs)
 	return err
 }
 
