@@ -215,6 +215,20 @@ func (h *NodeHandler) createInbound(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.Protocol == "hysteria2" && len(req.Settings) == 0 {
+		req.Settings, err = newHysteria2Settings(inbounds)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if req.Protocol == "shadowsocks" {
+		req.Settings, err = newRelaySettings(req.Settings)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	if err := validateInboundRequest(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -356,7 +370,8 @@ func inboundRequest(inbound model.NodeInbound) model.CreateInboundReq {
 	return req
 }
 
-var inboundIdentityFields = []string{"private_key", "public_key", "short_id", "uuid", "password", "obfs_password"}
+// method 与 password 共同构成 SS2022 落地的身份，改任一个都会让所有入口机的出口失效。
+var inboundIdentityFields = []string{"private_key", "public_key", "short_id", "uuid", "password", "obfs_password", "method"}
 
 func mergeInboundSettings(original, patch json.RawMessage) (json.RawMessage, error) {
 	var settings, updates map[string]any
@@ -384,7 +399,9 @@ func validateInboundRequest(req *model.CreateInboundReq) error {
 	if req.Protocol == "" || req.Port < 1 || req.Port > 65535 {
 		return fmt.Errorf("protocol and a valid port are required")
 	}
-	if req.Outbound != nil && req.Outbound.Network == "" {
+	// SOCKS5 出口只转发 TCP，空值按 TCP 存储以保持旧记录兼容；
+	// shadowsocks 的空值表示 TCP+UDP，不能被改写。
+	if req.Outbound != nil && req.Outbound.Type == "socks" && req.Outbound.Network == "" {
 		req.Outbound.Network = "tcp"
 	}
 	if err := model.ValidateOutbound(req.Outbound); err != nil {
@@ -412,6 +429,14 @@ func validateInboundRequest(req *model.CreateInboundReq) error {
 		if !validDomainName(sni) || privateKey == "" || publicKey == "" {
 			return fmt.Errorf("vless-reality requires sni, private_key, public_key in settings")
 		}
+	case "shadowsocks":
+		if err := validateRelaySettings(settings); err != nil {
+			return err
+		}
+		// 落地入站本身就是出口；再串一层上游会让"在哪落地"变得不可见。
+		if req.Outbound != nil {
+			return fmt.Errorf("shadowsocks relay inbounds exit directly and cannot have an upstream outbound")
+		}
 	default:
 		return fmt.Errorf("unsupported protocol")
 	}
@@ -425,6 +450,15 @@ func inboundNetwork(protocol string) string {
 	return "tcp"
 }
 
+// inboundNetworks 列出入站实际占用的 L4 协议。SS 落地同时监听 TCP 与 UDP，
+// 只按单一网络判冲突会让同端口的 hysteria2 通过校验、推送时才绑定失败。
+func inboundNetworks(protocol string) []string {
+	if protocol == "shadowsocks" {
+		return []string{"tcp", "udp"}
+	}
+	return []string{inboundNetwork(protocol)}
+}
+
 func checkInboundConflicts(inbounds []model.NodeInbound, exceptID int, req model.CreateInboundReq) error {
 	for _, inbound := range inbounds {
 		if inbound.ID == exceptID {
@@ -433,8 +467,15 @@ func checkInboundConflicts(inbounds []model.NodeInbound, exceptID int, req model
 		if inbound.Tag == req.Tag {
 			return fmt.Errorf("inbound tag %q already exists on this node", req.Tag)
 		}
-		if inbound.Port == req.Port && inboundNetwork(inbound.Protocol) == inboundNetwork(req.Protocol) {
-			return fmt.Errorf("port %d/%s is already used by inbound %q", req.Port, inboundNetwork(req.Protocol), inbound.Tag)
+		if inbound.Port != req.Port {
+			continue
+		}
+		for _, network := range inboundNetworks(req.Protocol) {
+			for _, used := range inboundNetworks(inbound.Protocol) {
+				if network == used {
+					return fmt.Errorf("port %d/%s is already used by inbound %q", req.Port, network, inbound.Tag)
+				}
+			}
 		}
 	}
 	return nil

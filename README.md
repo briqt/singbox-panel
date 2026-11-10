@@ -15,6 +15,7 @@ Personal sing-box proxy node management panel. Full lifecycle: create node → S
 - **One-click node setup** — auto-selects protocols, generates keys, issues certs, pushes config
 - **用户管理** — UUID 认证、流量配额、到期时间和具体协议线路（inbound ID）级授权；同一节点的两条 Reality 可分别授权
 - **独立线路出口** — 同一节点可新增 Reality 线路，为单条入站绑定认证 SOCKS5 TCP 出口；默认线路继续直出，上游故障不回落直连
+- **SS2022 落地** — 指定一台节点作为落地机，其他节点的 hysteria2 / Reality 线路经 Shadowsocks 2022（TCP+UDP）从它出网；落地入站有来源白名单、不进订阅，落地不通时线路直接失败、不回落直连
 - **Multi-format subscriptions** — base64 (v2rayN/Shadowrocket), Clash Meta YAML (auto-detect via User-Agent)
 - **Certificate management** — ACME via acme.sh with auto-renewal cron. Renewal
   decisions are made on the certificate's **expiry**, read back from the node,
@@ -197,6 +198,26 @@ over: no Apple or Microsoft edge serves TLS on port 31795.
 ```
 
 通过 `POST /api/nodes/{id}/inbounds` 新建后，再用 `PUT /api/users/{id}` 的 `inbound_ids` 显式授权。`PUT /api/inbounds/{id}` 编辑名称、端口及出口；未传 `settings` 保持协议身份，`outbound: null` 切回直连。新增的自定义线路不由 auto-setup/reprovision 接管；Reality 握手目标接口可用 `inbound_id` 精确定位。
+
+### SS2022 落地（节点间链路）
+
+把一台节点当作落地出口，其他节点各加入口线路、经 Shadowsocks 2022 转发过去。节点间链路不经过 GFW，不需要伪装，但必须加密并且承载 UDP，所以选 SS2022 而不选 SOCKS5 或 Reality。
+
+- **落地入站**：`protocol: "shadowsocks"`，只供节点之间使用：不进订阅、不按用户授权启停，由 SS2022 密钥和 `allowed_sources` 来源白名单共同把关。白名单之外的来源会被显式 `reject`（路由 final 是 direct，只写放行规则等于不设白名单）；白名单不能为空，也不能是 `0.0.0.0/0`。密钥由面板生成，`method` 和 `password` 不可修改，白名单可以调整。落地入站本身直接出网，不能再串接上游。
+- **入口线路**：普通的 `hysteria2` 或 `vless-reality` 自定义线路，`outbound` 设为 `{"type":"shadowsocks","server":<落地 IP>,"server_port":…,"method":…,"password":…}`。`network` 留空时 TCP 和 UDP 都走落地（Clash 条目 `udp: true`），设为 `tcp` 则 UDP 直接失败。自定义 hysteria2 线路如果省略 `settings`，会沿用节点默认 hysteria2 的域名、证书和混淆参数。
+- **落地不通就失败**：该入站的全部流量只路由到专属 SS 出口。落地宕机、密钥不符或来源被拒时，TCP 和 UDP 都直接失败，绝不改为从入口机直出。`TestCoreRelayLandingFailsClosed` 用真实内核证伪这一点：源站只监听回环，入口一旦直出就会被命中。
+- **限制**：自定义 hysteria2 复制的是创建时的域名和证书路径。默认线路如果经 auto-setup 迁移了域名，需要重建这条线路。
+
+可复现的配置入口是 `scripts/provision_relay.py`。它在面板机上运行，默认只做预览，加 `--apply` 才写入；重复执行时会复用一致的线路，不会重建密钥：
+
+```bash
+python3 scripts/provision_relay.py --env-file /opt/singbox-panel/.env \
+  --landing-node-id 8 --landing-server 198.51.100.7 --relay-port 8443 --suffix laxcg \
+  --entry 1:2053:2053 --entry 2:8443:8443 \
+  --source 203.0.113.4 --source 203.0.113.5 --user-id 1
+```
+
+`--entry` 的格式是 `节点ID:hysteria2端口:reality端口`；`--source` 填入口机连接落地时的真实源 IP。上线后应从真实客户端验证：经新线路访问时，出口 IP 是落地机；把入口机移出白名单后，该线路必须失败，不能变成直出。
 
 推送会重启该节点整个 sing-box，现有连接可能短暂重连，不承诺零中断。升级前备份数据库、二进制和节点配置；上线后应验证真实出口及错误凭据会失败，不能把监听正常或 `check` 成功当作上游可用。授权变更仅同步受影响节点，失败恢复原授权和配置。
 

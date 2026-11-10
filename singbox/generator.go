@@ -28,10 +28,11 @@ func GenerateConfig(users []model.User, inbounds []model.NodeInbound) ([]byte, e
 
 // GenerateConfigForInbounds 是生产配置入口。无授权用户的入站不监听，避免协议
 // 实现把空认证列表解释成免认证；新增线路因此在显式授权前保持关闭。
+// 落地入站例外：它不按用户认证，而由自己的 SS2022 密钥与来源白名单把关。
 func GenerateConfigForInbounds(usersByInbound map[int][]model.User, inbounds []model.NodeInbound) ([]byte, error) {
 	active := make([]model.NodeInbound, 0, len(inbounds))
 	for _, ib := range inbounds {
-		if len(usersByInbound[ib.ID]) > 0 {
+		if len(usersByInbound[ib.ID]) > 0 || ib.Protocol == RelayProtocol {
 			active = append(active, ib)
 		}
 	}
@@ -71,6 +72,15 @@ func generateConfig(usersFor func(model.NodeInbound) []model.User, inbounds []mo
 			inbound = buildRealityInbound(users, ib, settings, tag)
 		case "vless-httpupgrade":
 			inbound = buildHTTPUpgradeInbound(users, ib, settings, tag)
+		case RelayProtocol:
+			relay, relayRules, err := buildRelayInbound(ib, settings, tag)
+			if err != nil {
+				return nil, fmt.Errorf("inbound %d: %w", ib.ID, err)
+			}
+			inbound = relay
+			rules = append(rules, relayRules...)
+			// 落地入站没有用户：不参与按用户的流量统计，也不会被授权打开或关闭。
+			users = nil
 		default:
 			return nil, fmt.Errorf("inbound %d: unsupported protocol", ib.ID)
 		}
@@ -84,16 +94,7 @@ func generateConfig(usersFor func(model.NodeInbound) []model.User, inbounds []mo
 		if upstream := ib.Outbound; upstream != nil {
 			// 直接引用本轮实际生成的 tag，重排和去重不会导致路由串线。
 			outboundTag := "upstream-" + tag
-			outbound := map[string]any{
-				"type": "socks", "tag": outboundTag, "version": "5",
-				"server": upstream.Server, "server_port": upstream.ServerPort,
-				"network": "tcp",
-			}
-			if upstream.Username != "" {
-				outbound["username"] = upstream.Username
-				outbound["password"] = upstream.Password
-			}
-			outbounds = append(outbounds, outbound)
+			outbounds = append(outbounds, buildUpstreamOutbound(upstream, outboundTag))
 			rules = append(rules, map[string]any{"inbound": []string{tag}, "action": "route", "outbound": outboundTag})
 		}
 	}
@@ -113,6 +114,62 @@ func generateConfig(usersFor func(model.NodeInbound) []model.User, inbounds []mo
 		config["route"] = map[string]any{"rules": rules, "final": "direct"}
 	}
 	return json.MarshalIndent(config, "", "  ")
+}
+
+// RelayProtocol 是节点间落地入站的协议名，只出现在面板与服务端配置里。
+const RelayProtocol = "shadowsocks"
+
+// buildRelayInbound 生成落地入站及其路由。白名单内的来源直出，其余一律 reject：
+// 路由 final 是 direct，只写放行规则不写拒绝规则，白名单就形同虚设。
+func buildRelayInbound(ib model.NodeInbound, s map[string]any, tag string) (map[string]any, []map[string]any, error) {
+	method, _ := s["method"].(string)
+	password, _ := s["password"].(string)
+	if err := model.ValidateSS2022Key(method, password); err != nil {
+		return nil, nil, err
+	}
+	sources, err := model.RelayAllowedSources(s)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ib.Outbound != nil {
+		return nil, nil, fmt.Errorf("shadowsocks relay inbounds cannot have an upstream outbound")
+	}
+	inbound := map[string]any{
+		"type": "shadowsocks", "tag": tag,
+		"listen": "::", "listen_port": ib.Port,
+		"method": method, "password": password,
+	}
+	rules := []map[string]any{
+		{"inbound": []string{tag}, "source_ip_cidr": sources, "action": "route", "outbound": "direct"},
+		{"inbound": []string{tag}, "action": "reject"},
+	}
+	return inbound, rules, nil
+}
+
+// buildUpstreamOutbound 生成线路专属出口。连不上、认证失败都由这个出口报错，
+// 路由里没有任何指向 direct 的后备，所以失败不会变成从入口机直出。
+func buildUpstreamOutbound(upstream *model.OutboundConfig, tag string) map[string]any {
+	if upstream.Type == "shadowsocks" {
+		outbound := map[string]any{
+			"type": "shadowsocks", "tag": tag,
+			"server": upstream.Server, "server_port": upstream.ServerPort,
+			"method": upstream.Method, "password": upstream.Password,
+		}
+		if upstream.Network != "" {
+			outbound["network"] = upstream.Network
+		}
+		return outbound
+	}
+	outbound := map[string]any{
+		"type": "socks", "tag": tag, "version": "5",
+		"server": upstream.Server, "server_port": upstream.ServerPort,
+		"network": "tcp",
+	}
+	if upstream.Username != "" {
+		outbound["username"] = upstream.Username
+		outbound["password"] = upstream.Password
+	}
+	return outbound
 }
 
 func inboundTags(ibList []map[string]any) []string {

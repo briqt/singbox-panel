@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Alert, Checkbox, Form, Input, InputNumber, Modal, Select, Typography } from 'antd'
-import { api } from '../api'
+import { api, egressLabel, isRelayInbound } from '../api'
 import type { Inbound, Node, NodeDetail, SetupAssessment, SocksOutbound } from '../api'
 import { useI18n } from '../i18n'
 import { useToast } from '../toast'
@@ -213,11 +213,15 @@ export function InboundModal({
   const outboundType = Form.useWatch('outboundType', form)
   const clearCredentials = Form.useWatch('clearCredentials', form)
   const hasSavedPassword = !!inbound?.outbound?.password
+  // SS 落地出口与落地入站的身份由配置脚本维护，表单只改名称、tag 与端口，
+  // 提交时不带 outbound，后端据此原样保留。
+  const egressLocked = !!inbound && (inbound.outbound?.type === 'shadowsocks' || isRelayInbound(inbound))
 
   const submit = async (values: InboundFormValues) => {
     setSaving(true)
     try {
       let outbound: SocksOutbound | undefined
+      const savedSocks = inbound?.outbound?.type === 'socks' ? inbound.outbound : undefined
       const sameUpstream = inbound?.outbound?.server === values.server?.trim()
         && inbound?.outbound?.server_port === values.serverPort
       if (values.outboundType === 'socks') {
@@ -226,12 +230,14 @@ export function InboundModal({
           server: values.server.trim(),
           server_port: values.serverPort,
           username: values.clearCredentials ? '' : values.username?.trim() || undefined,
-          password: values.clearCredentials ? '' : values.password || (sameUpstream ? inbound?.outbound?.password : undefined),
-          network: inbound?.outbound?.network,
+          password: values.clearCredentials ? '' : values.password || (sameUpstream ? savedSocks?.password : undefined),
+          network: savedSocks?.network,
         }
       }
       const body = { name: values.name.trim(), tag: values.tag.trim(), port: values.port }
-      if (inbound) {
+      if (inbound && egressLocked) {
+        await api.updateInbound(inbound.id, body)
+      } else if (inbound) {
         await api.updateInbound(inbound.id, { ...body, outbound: outbound ?? null })
       } else {
         await api.createInbound(node.id, { ...body, protocol: 'vless-reality', outbound })
@@ -278,10 +284,10 @@ export function InboundModal({
           name: inbound?.name ?? '',
           tag: inbound?.tag ?? '',
           port: inbound?.port,
-          outboundType: inbound?.outbound ? 'socks' : 'direct',
-          server: inbound?.outbound?.server ?? '',
-          serverPort: inbound?.outbound?.server_port ?? 1080,
-          username: inbound?.outbound?.username ?? '',
+          outboundType: inbound?.outbound?.type === 'socks' ? 'socks' : 'direct',
+          server: inbound?.outbound?.type === 'socks' ? inbound.outbound.server : '',
+          serverPort: inbound?.outbound?.type === 'socks' ? inbound.outbound.server_port : 1080,
+          username: inbound?.outbound?.type === 'socks' ? inbound.outbound.username ?? '' : '',
           password: '',
           clearCredentials: false,
         }}
@@ -298,13 +304,19 @@ export function InboundModal({
         <Form.Item name="port" label={t('inboundPort')} rules={[{ required: true }, { type: 'number', min: 1, max: 65535 }]}>
           <InputNumber min={1} max={65535} precision={0} style={{ width: '100%' }} />
         </Form.Item>
-        <Form.Item name="outboundType" label={t('egress')} extra={t('egressHint')}>
-          <Select options={[
-            { value: 'direct', label: t('egressDirect') },
-            { value: 'socks', label: t('egressSocks') },
-          ]} />
-        </Form.Item>
-        {outboundType === 'socks' && (
+        {egressLocked && inbound ? (
+          <Form.Item label={t('egress')} extra={t('egressLockedHint')}>
+            <Input value={egressLabel(inbound, t('egressDirect'), t('egressRelay'))} disabled />
+          </Form.Item>
+        ) : (
+          <Form.Item name="outboundType" label={t('egress')} extra={t('egressHint')}>
+            <Select options={[
+              { value: 'direct', label: t('egressDirect') },
+              { value: 'socks', label: t('egressSocks') },
+            ]} />
+          </Form.Item>
+        )}
+        {!egressLocked && outboundType === 'socks' && (
           <>
             <Form.Item name="server" label={t('socksServer')} extra={t('socksServerHint')} rules={[
               { required: true, whitespace: true },
@@ -376,14 +388,16 @@ export function AutoSetupModal({
   const [assessing, setAssessing] = useState(false)
   const [running, setRunning] = useState(false)
 
-  const existing = [...new Set((detail?.inbounds ?? []).map((inbound) => inbound.protocol))]
+  // auto-setup 只接管默认线路；自定义线路（含落地入站）不能出现在协议列表里。
+  const managedInbounds = (detail?.inbounds ?? []).filter((inbound) => !inbound.custom)
+  const existing = [...new Set(managedInbounds.map((inbound) => inbound.protocol))]
   const hasExisting = existing.length > 0
 
   useEffect(() => {
     if (!node) return
     setDomain(node.domain ?? '')
     setRealitySNI('')
-    const hy2 = detail?.inbounds.find((inbound) => inbound.protocol === 'hysteria2')?.settings
+    const hy2 = managedInbounds.find((inbound) => inbound.protocol === 'hysteria2')?.settings
     setHy2Profile(typeof hy2?.profile === 'string' ? hy2.profile : hy2?.obfs_password ? 'salamander' : '')
     setMode(
       existing.includes('vless-httpupgrade')

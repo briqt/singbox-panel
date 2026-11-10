@@ -50,6 +50,18 @@ export interface SocksOutbound {
   network?: 'tcp'
 }
 
+// 节点间落地出口。只在面板与服务端配置中出现，不进订阅。
+export interface ShadowsocksOutbound {
+  type: 'shadowsocks'
+  server: string
+  server_port: number
+  method: string
+  password?: string
+  network?: 'tcp'
+}
+
+export type Outbound = SocksOutbound | ShadowsocksOutbound
+
 export interface Inbound {
   id: number
   node_id: number
@@ -60,7 +72,7 @@ export interface Inbound {
   enabled: boolean
   sort_order: number
   settings?: Record<string, unknown>
-  outbound?: SocksOutbound
+  outbound?: Outbound
   custom: boolean
 }
 
@@ -78,7 +90,7 @@ export interface UpdateInboundBody {
   protocol?: string
   port?: number
   settings?: Record<string, unknown>
-  outbound?: SocksOutbound | null
+  outbound?: Outbound | null
 }
 
 export interface NodeDetail extends Node {
@@ -427,4 +439,18 @@ export const api = {
   trafficAuditStatus: (nodeId: number) => request<TrafficAuditStatus>(`/api/nodes/${nodeId}/traffic-audit`),
   installTrafficAudit: (nodeId: number) =>
     request<unknown>(`/api/nodes/${nodeId}/traffic-audit`, send('POST', {})),
+}
+
+// 落地入站（protocol "shadowsocks"）只供其他节点做上游，不授权给用户。
+export const isRelayInbound = (inbound: Pick<Inbound, 'protocol'>) => inbound.protocol === 'shadowsocks'
+
+export function egressLabel(inbound: Pick<Inbound, 'protocol' | 'outbound' | 'settings'>, direct: string, relay: string): string {
+  if (isRelayInbound(inbound)) {
+    const sources = inbound.settings?.allowed_sources
+    return `${relay} · ${Array.isArray(sources) ? sources.length : 0}`
+  }
+  const outbound = inbound.outbound
+  if (!outbound) return direct
+  const kind = outbound.type === 'shadowsocks' ? 'SS2022' : 'SOCKS5'
+  return `${kind} · ${outbound.server}:${outbound.server_port}`
 }

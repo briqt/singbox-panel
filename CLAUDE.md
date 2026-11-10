@@ -53,6 +53,7 @@ make deploy DEPLOY_HOST=<ssh别名>   # 构建 + 上传 + 重启 + 回读 /api/v
 │   ├── setup.go            #   一键纳管
 │   ├── sshharden.go        #   节点只留公钥登录 + 回读校验
 │   ├── hostaudit.go        #   整机流量：采集器安装/状态/卸载、按小时拉取
+│   ├── relay.go            #   SS2022 落地入站：密钥生成、白名单校验、自定义 hy2 沿用默认参数
 │   └── reprovision.go      #   批量重跑 auto-setup（全网协议升级走这里）
 ├── nodeaudit/              # 节点整机流量采集器（Python 脚本 + systemd 单元，go:embed 打进二进制）
 ├── singbox/                # sing-box 配置与 Clash 订阅生成

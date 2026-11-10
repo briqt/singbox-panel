@@ -8,7 +8,7 @@ import {
   PlusOutlined,
   ReloadOutlined,
 } from '@ant-design/icons'
-import { api } from '../api'
+import { api, egressLabel, isRelayInbound } from '../api'
 import type { Inbound, Node, NodeDetail, NodeStatus } from '../api'
 import { useI18n } from '../i18n'
 import { useToast } from '../toast'
@@ -531,10 +531,8 @@ function NodeBody({
           {
             title: t('egress'),
             render: (_, inbound) => (
-              <Tag color={inbound.outbound ? 'purple' : 'default'}>
-                {inbound.outbound
-                  ? `SOCKS5 · ${inbound.outbound.server}:${inbound.outbound.server_port}`
-                  : t('egressDirect')}
+              <Tag color={inbound.outbound || isRelayInbound(inbound) ? 'purple' : 'default'}>
+                {egressLabel(inbound, t('egressDirect'), t('egressRelay'))}
               </Tag>
             ),
           },

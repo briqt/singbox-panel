@@ -16,7 +16,7 @@ core=$(find "$work" -name sing-box -type f | head -1)
 "$core" version
 # A precompiled test binary lets a host without Go run the same test.
 if [ -n "${SINGBOX_CORE_TEST:-}" ]; then
-  SINGBOX_TEST_BIN="$core" "$SINGBOX_CORE_TEST" -test.run '^TestCore(HysteriaProfiles|InboundUpstream)$' -test.v
+  SINGBOX_TEST_BIN="$core" "$SINGBOX_CORE_TEST" -test.run '^TestCore(HysteriaProfiles|InboundUpstream|RelayLandingFailsClosed)$' -test.v
 else
-  SINGBOX_TEST_BIN="$core" go test ./singbox -run '^TestCore(HysteriaProfiles|InboundUpstream)$' -v -count=1
+  SINGBOX_TEST_BIN="$core" go test ./singbox -run '^TestCore(HysteriaProfiles|InboundUpstream|RelayLandingFailsClosed)$' -v -count=1
 fi

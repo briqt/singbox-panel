@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button, Checkbox, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Space, Spin, Switch, Tag, Typography } from 'antd'
 import dayjs from 'dayjs'
 import type { Dayjs } from 'dayjs'
-import { api } from '../api'
+import { api, egressLabel, isRelayInbound } from '../api'
 import type { Node, NodeDetail, User } from '../api'
 import { useI18n } from '../i18n'
 import { useToast } from '../toast'
@@ -233,16 +233,14 @@ export function EditUserModal({
                   {node.domain || node.host}
                 </Text>
                 <Space direction="vertical" size={6} style={{ display: 'flex', marginTop: 6 }}>
-                  {(node.inbounds ?? []).map((inbound) => (
+                  {(node.inbounds ?? []).filter((inbound) => !isRelayInbound(inbound)).map((inbound) => (
                     <Checkbox key={inbound.id} value={inbound.id}>
                       {inbound.name || inbound.tag}
                       <Text type="secondary" style={{ margin: '0 8px', fontSize: 12 }}>
                         {inbound.protocol} · {inbound.port} · {inbound.tag}
                       </Text>
                       <Tag color={inbound.outbound ? 'purple' : 'default'}>
-                        {t('egress')}: {inbound.outbound
-                          ? `SOCKS5 · ${inbound.outbound.server}:${inbound.outbound.server_port}`
-                          : t('egressDirect')}
+                        {t('egress')}: {egressLabel(inbound, t('egressDirect'), t('egressRelay'))}
                       </Tag>
                       {!inbound.enabled && <Tag>{t('disabled')}</Tag>}
                     </Checkbox>

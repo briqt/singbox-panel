@@ -163,7 +163,7 @@ func clashReality(user model.User, node model.Node, ib model.NodeInbound, s map[
     reality-opts:
       public-key: %s
       short-id: %s
-    network: tcp`, name, realityServer(node.Host, s), ib.Port, ib.Outbound == nil, user.UUID, sni, fp, publicKey, shortID)
+    network: tcp`, name, realityServer(node.Host, s), ib.Port, ib.Outbound.CarriesUDP(), user.UUID, sni, fp, publicKey, shortID)
 }
 
 func clashHTTPUpgrade(user model.User, node model.Node, ib model.NodeInbound, s map[string]any, name string) string {
@@ -190,5 +190,5 @@ func clashHTTPUpgrade(user model.User, node model.Node, ib model.NodeInbound, s 
     network: httpupgrade
     httpupgrade-opts:
       path: %s
-      host: %s`, name, domain, ib.Outbound == nil, user.UUID, domain, path, domain)
+      host: %s`, name, domain, ib.Outbound.CarriesUDP(), user.UUID, domain, path, domain)
 }

@@ -229,7 +229,9 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 	// Ports handed out during this run, per L4 network. See selectListenPort.
 	reservedPorts := map[string]map[int]bool{"tcp": {}, "udp": {}}
 	for _, inbound := range existingInbounds {
-		reservedPorts[inboundNetwork(inbound.Protocol)][inbound.Port] = true
+		for _, network := range inboundNetworks(inbound.Protocol) {
+			reservedPorts[network][inbound.Port] = true
+		}
 	}
 	hadError := false
 	for _, proto := range req.Protocols {
