@@ -561,6 +561,13 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 	if tuneErr != nil {
 		tuning = &KernelTuneResult{Note: "kernel tuning failed: " + tuneErr.Error()}
 	}
+	// Same baseline as /tune: nodes do not update themselves.
+	var autoUpdates any
+	if updates, err := disableAutoUpdates(client); err != nil {
+		autoUpdates = map[string]string{"error": err.Error()}
+	} else {
+		autoUpdates = updates
+	}
 
 	// Traffic accounting is observational: a node that cannot run it is still a
 	// working proxy, so a failure is reported, never fatal. Re-running
@@ -576,7 +583,7 @@ func (h *SetupHandler) HandleAutoSetup(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"inbounds": results, "push": "ok", "sync": syncResults, "node": node.Name,
-		"assessment": assessment, "kernel_tuning": tuning, "traffic_audit": audit,
+		"assessment": assessment, "kernel_tuning": tuning, "auto_updates": autoUpdates, "traffic_audit": audit,
 	})
 }
 

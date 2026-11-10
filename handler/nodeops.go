@@ -76,12 +76,100 @@ func (h *NodeOpsHandler) tune(w http.ResponseWriter, r *http.Request) {
 	}
 	defer client.Close()
 
-	result, err := applyKernelTuning(client)
+	res, status := h.applyBaseline(node, client)
+	writeJSON(w, status, res)
+}
+
+// NodeBaselineResult is the per-node outcome of the node baseline: kernel
+// tuning plus no automatic updates, both read back.
+type NodeBaselineResult struct {
+	NodeID       int                `json:"node_id"`
+	Node         string             `json:"node"`
+	Status       string             `json:"status"` // ok | ineffective | failed
+	KernelTuning *KernelTuneResult  `json:"kernel_tuning,omitempty"`
+	AutoUpdates  *AutoUpdatesResult `json:"auto_updates,omitempty"`
+	Error        string             `json:"error,omitempty"`
+}
+
+func (h *NodeOpsHandler) applyBaseline(node *model.Node, client *ssh.Client) (*NodeBaselineResult, int) {
+	res := &NodeBaselineResult{NodeID: node.ID, Node: node.Name, Status: "ok"}
+	tuning, err := applyKernelTuning(client)
+	if err != nil {
+		res.Status, res.Error = "failed", "kernel tuning: "+err.Error()
+		return res, http.StatusBadGateway
+	}
+	res.KernelTuning = tuning
+	updates, err := disableAutoUpdates(client)
+	if err != nil {
+		res.Status, res.Error = "failed", "disable automatic updates: "+err.Error()
+		return res, http.StatusBadGateway
+	}
+	res.AutoUpdates = updates
+	if len(tuning.Ineffective) > 0 || len(updates.Ineffective) > 0 {
+		res.Status = "ineffective"
+	}
+	return res, http.StatusOK
+}
+
+// HandleBatchTune applies the node baseline to every enabled node, one at a
+// time. 200 all ok, 207 some, 502 none.
+func (h *NodeOpsHandler) HandleBatchTune(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+	var req struct {
+		NodeIDs []int `json:"node_ids"`
+		DryRun  bool  `json:"dry_run"`
+	}
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+	}
+	nodes, err := h.Nodes.ListEnabled()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"node": node.Name, "kernel_tuning": result})
+	want := map[int]bool{}
+	for _, id := range req.NodeIDs {
+		want[id] = true
+	}
+	var results []*NodeBaselineResult
+	ok, total := 0, 0
+	for i := range nodes {
+		node := nodes[i]
+		if len(want) > 0 && !want[node.ID] {
+			continue
+		}
+		total++
+		if req.DryRun {
+			results = append(results, &NodeBaselineResult{NodeID: node.ID, Node: node.Name, Status: "would-apply"})
+			continue
+		}
+		client, err := h.Config.sshConnect(&node)
+		if err != nil {
+			results = append(results, &NodeBaselineResult{NodeID: node.ID, Node: node.Name, Status: "failed", Error: "ssh: " + err.Error()})
+			continue
+		}
+		res, _ := h.applyBaseline(&node, client)
+		client.Close()
+		if res.Status == "ok" {
+			ok++
+		}
+		results = append(results, res)
+	}
+	code := http.StatusOK
+	switch {
+	case req.DryRun:
+	case total > 0 && ok == 0:
+		code = http.StatusBadGateway
+	case ok < total:
+		code = http.StatusMultiStatus
+	}
+	writeJSON(w, code, map[string]any{"results": results, "ok": ok, "total": total, "dry_run": req.DryRun})
 }
 
 func (h *NodeOpsHandler) getVersion(w http.ResponseWriter, r *http.Request) {

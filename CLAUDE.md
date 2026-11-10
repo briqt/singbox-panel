@@ -23,7 +23,7 @@ make deploy DEPLOY_HOST=<ssh别名>   # 构建 + 上传 + 重启 + 回读 /api/v
 |------|--------|
 | `GET /api/health` | 存活探针。**只报进程活着**，不查任何依赖——依赖抖动不该触发重启 |
 | `GET /api/ready` | 就绪探针。查数据库可达性，不可达返 **503** |
-| `POST /api/nodes/{id}/tune` | 对存量节点重新应用内核基线并回读校验 |
+| `POST /api/nodes/{id}/tune` | 对存量节点重新应用节点基线并回读校验：内核参数 + **关闭一切自动更新**（apt 定时器、unattended-upgrades、motd 新闻/更新检查、Ubuntu Pro 定时器、snap 刷新；只停调度不卸载，手动 apt 照常）。auto-setup 自动执行；`/api/batch/tune` 逐个执行全网 |
 | `POST /api/nodes/{id}/cert-renew` | 重签 TLS 入站的证书并回读校验，不动端口与 Reality 密钥（`{"force":true}` 可无视有效期强制重签） |
 | `POST /api/batch/reprovision` | 对所有启用节点重跑 auto-setup，逐个串行；部分成功 207、全失败 502，`{"dry_run":true}` 先看会动谁 |
 | `POST /api/nodes/{id}/ssh-harden` | 关闭节点密码登录（只留公钥）。先证明面板公钥单独可用，回读 `sshd -T`，再问**运行中的** sshd 还提供哪些方式（探测从不发送密码），任一不符即回滚；`/api/batch/ssh-harden` 逐个执行 |

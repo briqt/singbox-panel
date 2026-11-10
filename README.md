@@ -259,6 +259,13 @@ become stale.
   the requested version, include `with_v2ray_api`, and accept the current config
   before replacing the binary. Running nodes restart and verify the executable;
   a failed restart restores the previous binary.
+- `POST /api/nodes/{id}/tune` — node baseline, read back: kernel sysctls, and
+  **no automatic updates** (apt timers, unattended-upgrades, motd news/update
+  checks, Ubuntu Pro timer, snap refresh are masked/held; nothing is
+  uninstalled, manual apt keeps working). Nodes run pinned software the panel
+  upgrades deliberately; unattended installs can restart services under it, and
+  on small nodes the periodic apt check alone held the apt lock for half an hour.
+  auto-setup applies it; `POST /api/batch/tune` does every enabled node serially (200/207/502).
 - `GET /api/nodes/{id}/setup-assessment?mode=auto&domain=X` — explain DNS and deployment-mode inference
 - `POST /api/nodes/{id}/auto-setup` — idempotent protocol setup and domain migration (`mode`: `auto`, `direct`, `cdn`, or `reality`)
 - `POST /api/nodes/{id}/cert-upload` — upload a TLS certificate + key (needed for CDN/HTTPUpgrade nodes)

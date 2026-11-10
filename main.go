@@ -152,6 +152,7 @@ func main() {
 	mux.HandleFunc("/api/batch/template", admin(batchHandler.ApplyTemplate))
 	mux.HandleFunc("/api/batch/traffic-audit", admin(hostAuditHandler.HandleBatch))
 	mux.HandleFunc("/api/batch/ssh-harden", admin(nodeOpsHandler.HandleBatchSSHHarden))
+	mux.HandleFunc("/api/batch/tune", admin(nodeOpsHandler.HandleBatchTune))
 	mux.HandleFunc("/api/host-traffic", admin(hostAuditHandler.HandleQuery))
 	mux.HandleFunc("/api/stats/meta", admin(statsHandler.HandleMeta))
 	mux.HandleFunc("/api/stats/usage", admin(statsHandler.HandleUsage))
