@@ -31,6 +31,7 @@ Personal sing-box proxy node management panel. Full lifecycle: create node → S
   requires a sing-box binary built with the `with_v2ray_api` tag; `install`
   pulls such a build (see [briqt/sing-box](https://github.com/briqt/sing-box)),
   since upstream release binaries omit it.
+- **用户流量按 ×2 折算** — 上传与下载均按原始代理字节 ×2 计入额度，近似反映转发的一收一发，不是精确网卡实测。当前周期、保留的全部历史、报表、CSV 与订阅用量统一折算，额度上限不变。数据库原始计数不改写，升级及重复读取不会再次翻倍；整机网卡/服务/端口实测保持原值。落地线路只在入口记一次用户账，不在落地机重复扣费。
 - **Usage analytics** — per user, per day, per node in any combination: daily
   trend (stacked by user or node), per-user totals with the nodes they used,
   per-node totals with the users on them, and a day × user × node detail table

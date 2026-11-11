@@ -349,7 +349,7 @@ func (s *UserStore) IsActive(u *User) bool {
 			return false
 		}
 	}
-	if u.TrafficLimitBytes > 0 && u.TrafficUsedBytes >= u.TrafficLimitBytes {
+	if quotaExhausted(u.TrafficUsedBytes, u.TrafficLimitBytes) {
 		return false
 	}
 	return true

@@ -55,7 +55,7 @@ func (h *StatsHandler) HandleUsage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, rows)
+	writeJSON(w, http.StatusOK, accountUsage(rows))
 }
 
 // HandleMyUsage is the same aggregation locked to the caller's own account.
@@ -77,7 +77,7 @@ func (h *StatsHandler) HandleMyUsage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, rows)
+	writeJSON(w, http.StatusOK, accountUsage(rows))
 }
 
 func (h *StatsHandler) HandleUserStats(w http.ResponseWriter, _ *http.Request) {
@@ -100,7 +100,7 @@ func (h *StatsHandler) HandleUserStats(w http.ResponseWriter, _ *http.Request) {
 	for _, u := range users {
 		stats = append(stats, UserStat{
 			ID: u.ID, Name: u.Name, Enabled: u.Enabled,
-			UsedBytes: u.TrafficUsedBytes, UpBytes: u.TrafficUpBytes, DownBytes: u.TrafficDownBytes,
+			UsedBytes: model.AccountedBytes(u.TrafficUsedBytes), UpBytes: model.AccountedBytes(u.TrafficUpBytes), DownBytes: model.AccountedBytes(u.TrafficDownBytes),
 			LimitBytes: u.TrafficLimitBytes, ExpireAt: u.ExpireAt,
 		})
 	}
@@ -132,7 +132,7 @@ func (h *StatsHandler) HandleNodeStats(w http.ResponseWriter, _ *http.Request) {
 		t := totals[n.ID]
 		stats = append(stats, NodeStat{
 			ID: n.ID, Name: n.Name, Enabled: n.Enabled,
-			UpBytes: t[0], DownBytes: t[1],
+			UpBytes: model.AccountedBytes(t[0]), DownBytes: model.AccountedBytes(t[1]),
 		})
 	}
 	writeJSON(w, http.StatusOK, stats)

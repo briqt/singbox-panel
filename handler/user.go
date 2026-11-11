@@ -42,7 +42,11 @@ func (h *UserHandler) list(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, users)
+	views := make([]accountedUser, 0, len(users))
+	for _, user := range users {
+		views = append(views, accountUser(user))
+	}
+	writeJSON(w, http.StatusOK, views)
 }
 
 func (h *UserHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +64,7 @@ func (h *UserHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, user)
+	writeJSON(w, http.StatusCreated, accountUser(*user))
 }
 
 func (h *UserHandler) get(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +78,7 @@ func (h *UserHandler) get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, user)
+	writeJSON(w, http.StatusOK, accountUser(*user))
 }
 
 func (h *UserHandler) update(w http.ResponseWriter, r *http.Request) {
@@ -152,8 +156,8 @@ func (h *UserHandler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, userSyncResponse{
-		User: user,
-		Sync: results,
+		accountedUser: accountUser(*user),
+		Sync:          results,
 	})
 }
 
@@ -257,13 +261,13 @@ func (h *UserHandler) resetTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, userSyncResponse{
-		User: user,
-		Sync: results,
+		accountedUser: accountUser(*user),
+		Sync:          results,
 	})
 }
 
 type userSyncResponse struct {
-	*model.User
+	accountedUser
 	Sync []NodeSyncResult `json:"sync"`
 }
 

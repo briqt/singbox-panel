@@ -106,6 +106,9 @@ POST /api/nodes/{id}/cert-renew  {"force":true}   # 强制重签
 GET /api/nodes/{id}/raw-config
 
 # 用量统计（谁、哪天、用了哪个节点）
+# 所有用户/节点代理用量、当前周期额度和订阅 upload/download 均已由服务端 ×2 折算。
+# 历史也统一 ×2；配额上限不变，前端/调用方不可再乘。DB 仍保存原始字节，禁止 UPDATE 翻倍。
+# 整机 /api/host-traffic 的网卡/服务/端口计数是实测值，不折算。
 GET /api/stats/usage?from=2026-08-01&to=2026-08-06&group=day,user,node
 GET /api/stats/usage?from=2026-08-01&to=2026-08-06&group=user   # 只看每人合计
 GET /api/stats/users   # 累计计数器（配额判定用）

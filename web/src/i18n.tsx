@@ -218,6 +218,9 @@ const zh = {
   pushedPartial: '已推送 {n} 个，失败：{failed}',
   installed: '{name}：{version} 已安装',
 
+  trafficAccountingHint: '用户用量按原始上下行 ×2 折算，历史与当前周期一致，配额上限不变；不是网卡实测值。',
+  accountedUploadBytes: '折算上行（字节，×2）',
+  accountedDownloadBytes: '折算下行（字节，×2）',
   usageToday: '今日用量',
   usageLast7: '近 7 天用量',
   last7: '近 7 天',
@@ -469,6 +472,9 @@ const en: Record<Key, string> = {
   pushedPartial: 'Pushed {n}; failed: {failed}',
   installed: '{name}: {version} installed',
 
+  trafficAccountingHint: 'User upload and download are accounted at 2× raw bytes, for both history and the current cycle. Quota limits are unchanged; these are not measured NIC bytes.',
+  accountedUploadBytes: 'Accounted upload (bytes, 2×)',
+  accountedDownloadBytes: 'Accounted download (bytes, 2×)',
   usageToday: 'Usage today',
   usageLast7: 'Usage last 7 days',
   last7: 'Last 7 days',

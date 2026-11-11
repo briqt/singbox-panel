@@ -55,7 +55,7 @@ export default function Overview() {
 
   return (
     <>
-      <PageHeader title={t('overview')} />
+      <PageHeader title={t('overview')} description={t('trafficAccountingHint')} />
       <Row gutter={[14, 14]} style={{ marginBottom: 16 }}>
         <Col xs={24} sm={12} lg={6}>
           <StatTile

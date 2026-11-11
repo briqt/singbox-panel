@@ -58,8 +58,8 @@ const HostTraffic = lazy(() => import('./HostTraffic'))
 
 type StatsView = 'proxy' | 'host'
 
-// 两个口径分开展示，不混算：代理流量是 sing-box 按用户转发的量；机器流量是网卡实际收发，
-// 即服务商计费看的量（代理的进 + 出，再加机器上其他一切）。
+// 两个口径分开展示，不混算：代理用量由后端按原始上下行 ×2 折算，前端不再乘；
+// 机器流量是网卡实际收发，保持实测值，不参与折算。
 export default function Stats() {
   const { t } = useI18n()
   const [view, setView] = useState<StatsView>('proxy')
@@ -199,7 +199,7 @@ function ProxyStats({ switcher }: { switcher: ReactNode }) {
   const grandTotal = totals.up + totals.down
 
   const exportCsv = () => {
-    const header = [t('day'), t('user'), t('nodes'), t('upload2'), t('download2')]
+    const header = [t('day'), t('user'), t('nodes'), t('accountedUploadBytes'), t('accountedDownloadBytes')]
     const body = rows.map((row) => [row.day ?? '', row.user ?? '', row.node ?? '', row.up, row.down])
     downloadCsv(`usage-${range?.[0]}_${range?.[1]}.csv`, [header, ...body])
   }
@@ -210,11 +210,11 @@ function ProxyStats({ switcher }: { switcher: ReactNode }) {
     <>
       <PageHeader
         title={t('stats')}
-        description={t('retentionHint', {
+        description={`${t('retentionHint', {
           months: meta.retention_months,
           from: meta.retention_from,
           tz: meta.timezone,
-        })}
+        })} · ${t('trafficAccountingHint')}`}
         extra={
           <Space wrap>
             {switcher}

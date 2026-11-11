@@ -125,10 +125,10 @@ func TestUsageBreaksDownByUserDayAndNode(t *testing.T) {
 
 	rows := env.usage(t, "from="+yesterday+"&to="+today+"&group=day,user,node")
 	want := []model.UsageRow{
-		{Day: yesterday, UserID: alice, User: "alice", NodeID: tokyo, Node: "tokyo", Up: 100, Down: 900},
-		{Day: yesterday, UserID: alice, User: "alice", NodeID: lax, Node: "lax", Up: 10, Down: 90},
-		{Day: yesterday, UserID: bob, User: "bob", NodeID: tokyo, Node: "tokyo", Up: 5, Down: 5},
-		{Day: today, UserID: alice, User: "alice", NodeID: tokyo, Node: "tokyo", Up: 1, Down: 2},
+		{Day: yesterday, UserID: alice, User: "alice", NodeID: tokyo, Node: "tokyo", Up: 200, Down: 1800},
+		{Day: yesterday, UserID: alice, User: "alice", NodeID: lax, Node: "lax", Up: 20, Down: 180},
+		{Day: yesterday, UserID: bob, User: "bob", NodeID: tokyo, Node: "tokyo", Up: 10, Down: 10},
+		{Day: today, UserID: alice, User: "alice", NodeID: tokyo, Node: "tokyo", Up: 2, Down: 4},
 	}
 	if len(rows) != len(want) {
 		t.Fatalf("got %d rows, want %d: %+v", len(rows), len(want), rows)
@@ -154,7 +154,7 @@ func TestUsageDayFollowsPanelTimezone(t *testing.T) {
 		t.Fatalf("sample leaked into the UTC day: %+v", rows)
 	}
 	rows := env.usage(t, "from="+today+"&to="+today+"&group=day")
-	if len(rows) != 1 || rows[0].Day != today || rows[0].Up != 7 || rows[0].Down != 3 {
+	if len(rows) != 1 || rows[0].Day != today || rows[0].Up != 14 || rows[0].Down != 6 {
 		t.Fatalf("unexpected rows: %+v", rows)
 	}
 }
@@ -168,7 +168,7 @@ func TestUsageWithoutGroupReturnsOneTotal(t *testing.T) {
 	env.sample(t, tokyo, alice, at(t, today, 10, 0), 1, 1)
 
 	rows := env.usage(t, "from="+today+"&to="+today)
-	if len(rows) != 1 || rows[0].Up != 5 || rows[0].Down != 7 || rows[0].Day != "" {
+	if len(rows) != 1 || rows[0].Up != 10 || rows[0].Down != 14 || rows[0].Day != "" {
 		t.Fatalf("unexpected total: %+v", rows)
 	}
 }
@@ -267,7 +267,7 @@ func TestMyUsageIsScopedToCaller(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].Up != 10 || rows[0].Down != 20 {
+	if len(rows) != 1 || rows[0].Up != 20 || rows[0].Down != 40 {
 		t.Fatalf("caller saw foreign usage: %+v", rows)
 	}
 	if rows[0].UserID != 0 {

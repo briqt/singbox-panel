@@ -1,5 +1,7 @@
 // 类型与 fetch 封装：形状对齐后端真实返回（Go handler/*）。
 // 错误约定：非 2xx 一律抛 Error，message = 后端 {"error": …}；401 触发登出回调。
+// User / MeInfo / UserStat / NodeStat / UsageRow 的代理用量已由后端 ×2 折算，前端不可再乘。
+// 配额上限不缩放；HostTraffic 的网卡、服务、端口等均为实测值，不折算。
 
 export type Role = 'admin' | 'user'
 

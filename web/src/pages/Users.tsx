@@ -67,6 +67,7 @@ export default function Users() {
     <>
       <PageHeader
         title={t('users')}
+        description={t('trafficAccountingHint')}
         extra={
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
             {t('newUser')}

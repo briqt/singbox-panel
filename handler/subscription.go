@@ -87,8 +87,8 @@ func (h *SubscriptionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Subscription-Userinfo header
-	upload := user.TrafficUpBytes
-	download := user.TrafficDownBytes
+	upload := model.AccountedBytes(user.TrafficUpBytes)
+	download := model.AccountedBytes(user.TrafficDownBytes)
 	total := user.TrafficLimitBytes
 	if total == 0 {
 		total = unlimitedSubscriptionTotalBytes

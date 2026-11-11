@@ -63,7 +63,7 @@ export default function MyInfo() {
 
   return (
     <>
-      <PageHeader title={t('myInfo')} />
+      <PageHeader title={t('myInfo')} description={t('trafficAccountingHint')} />
       <Row gutter={[14, 14]}>
         <Col xs={24} lg={12}>
           <Card size="small">

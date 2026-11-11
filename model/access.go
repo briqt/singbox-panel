@@ -170,7 +170,7 @@ func (s *AccessStore) HasAccess(userID, nodeID int) bool {
 }
 
 func (s *AccessStore) UsersForInbound(inboundID int) ([]int, error) {
-	rows, err := s.DB.Query(`SELECT u.id FROM user_inbound_access ua JOIN users u ON ua.user_id = u.id WHERE ua.inbound_id = ? AND u.enabled = 1 AND (u.expire_at = '' OR u.expire_at > datetime('now')) AND (u.traffic_limit_bytes = 0 OR u.traffic_used_bytes < u.traffic_limit_bytes) ORDER BY u.id`, inboundID)
+	rows, err := s.DB.Query(`SELECT u.id FROM user_inbound_access ua JOIN users u ON ua.user_id = u.id WHERE ua.inbound_id = ? AND u.enabled = 1 AND (u.expire_at = '' OR u.expire_at > datetime('now')) AND `+trafficAvailableSQL+` ORDER BY u.id`, inboundID, TrafficMultiplier)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +180,7 @@ func (s *AccessStore) UsersForInbound(inboundID int) ([]int, error) {
 // UsersForNode 仅供兼容性信息查询，不能用它填充节点全部入站的用户列表，
 // 因为每条入站都有独立的授权。
 func (s *AccessStore) UsersForNode(nodeID int) ([]int, error) {
-	rows, err := s.DB.Query(`SELECT DISTINCT u.id FROM user_inbound_access ua JOIN node_inbounds ib ON ib.id = ua.inbound_id JOIN users u ON ua.user_id = u.id WHERE ib.node_id = ? AND u.enabled = 1 AND (u.expire_at = '' OR u.expire_at > datetime('now')) AND (u.traffic_limit_bytes = 0 OR u.traffic_used_bytes < u.traffic_limit_bytes) ORDER BY u.id`, nodeID)
+	rows, err := s.DB.Query(`SELECT DISTINCT u.id FROM user_inbound_access ua JOIN node_inbounds ib ON ib.id = ua.inbound_id JOIN users u ON ua.user_id = u.id WHERE ib.node_id = ? AND u.enabled = 1 AND (u.expire_at = '' OR u.expire_at > datetime('now')) AND `+trafficAvailableSQL+` ORDER BY u.id`, nodeID, TrafficMultiplier)
 	if err != nil {
 		return nil, err
 	}

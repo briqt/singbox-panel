@@ -202,7 +202,7 @@ func (h *MeHandler) HandleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": user.ID, "name": user.Name, "role": "user",
 		"sub_token": user.SubToken, "enabled": user.Enabled,
-		"traffic_used_bytes": user.TrafficUsedBytes, "traffic_limit_bytes": user.TrafficLimitBytes,
+		"traffic_used_bytes": model.AccountedBytes(user.TrafficUsedBytes), "traffic_limit_bytes": user.TrafficLimitBytes,
 		"expire_at": user.ExpireAt,
 	})
 }
